@@ -12,6 +12,18 @@ import (
 	"cs-cloud/internal/terminal"
 )
 
+type PrewarmTracker interface {
+	MarkStarted(dir string)
+	MarkCompleted(dir string, err error)
+}
+
+type prewarmState struct {
+	Status     string     `json:"status"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Error      string     `json:"error,omitempty"`
+}
+
 type Server struct {
 	http    *http.Server
 	ln      net.Listener
@@ -33,6 +45,9 @@ type Server struct {
 	findFilesBuilds map[string]*fileSearchBuild
 
 	dispatcher *CommandDispatcher
+
+	prewarmMu   sync.Mutex
+	prewarmMap  map[string]*prewarmState
 }
 
 func New(opts ...Option) *Server {
@@ -41,6 +56,7 @@ func New(opts ...Option) *Server {
 	s := &Server{
 		eventBus:   runtime.NewEventBus(),
 		runtimeCfg: defaultRuntimeConfig(),
+		prewarmMap: make(map[string]*prewarmState),
 	}
 	for _, o := range opts {
 		o(s)
@@ -66,6 +82,7 @@ func New(opts ...Option) *Server {
 	api.HandleFunc("GET /runtime/diff", s.handleDiff)
 	api.HandleFunc("GET /runtime/diff/content", s.handleDiffContent)
 	api.HandleFunc("POST /runtime/dispose", s.handleInstanceDispose)
+	api.HandleFunc("GET /runtime/init-status", s.handleInitStatus)
 
 	api.HandleFunc("GET /openapi.json", s.handleOpenAPISpec)
 	api.HandleFunc("GET /docs", s.handleSwaggerUI)
@@ -191,4 +208,75 @@ func (s *Server) SetDispatcher(d *CommandDispatcher) {
 
 func (s *Server) Dispatcher() *CommandDispatcher {
 	return s.dispatcher
+}
+
+func (s *Server) MarkStarted(dir string) {
+	s.prewarmMu.Lock()
+	defer s.prewarmMu.Unlock()
+	now := time.Now()
+	st := s.prewarmMap[dir]
+	if st == nil {
+		st = &prewarmState{}
+		s.prewarmMap[dir] = st
+	}
+	st.Status = "in_progress"
+	st.StartedAt = &now
+	st.FinishedAt = nil
+	st.Error = ""
+}
+
+func (s *Server) MarkCompleted(dir string, err error) {
+	s.prewarmMu.Lock()
+	defer s.prewarmMu.Unlock()
+	now := time.Now()
+	st := s.prewarmMap[dir]
+	if st == nil {
+		st = &prewarmState{}
+		s.prewarmMap[dir] = st
+	}
+	if err != nil {
+		st.Status = "failed"
+		st.Error = err.Error()
+	} else {
+		st.Status = "completed"
+	}
+	st.FinishedAt = &now
+}
+
+func (s *Server) GetPrewarmState(dir string) *prewarmState {
+	s.prewarmMu.Lock()
+	defer s.prewarmMu.Unlock()
+	st := s.prewarmMap[dir]
+	if st == nil {
+		return nil
+	}
+	cp := *st
+	if st.StartedAt != nil {
+		t := *st.StartedAt
+		cp.StartedAt = &t
+	}
+	if st.FinishedAt != nil {
+		t := *st.FinishedAt
+		cp.FinishedAt = &t
+	}
+	return &cp
+}
+
+func (s *Server) AllPrewarmStates() map[string]*prewarmState {
+	s.prewarmMu.Lock()
+	defer s.prewarmMu.Unlock()
+	out := make(map[string]*prewarmState, len(s.prewarmMap))
+	for dir, st := range s.prewarmMap {
+		cp := *st
+		if st.StartedAt != nil {
+			t := *st.StartedAt
+			cp.StartedAt = &t
+		}
+		if st.FinishedAt != nil {
+			t := *st.FinishedAt
+			cp.FinishedAt = &t
+		}
+		out[dir] = &cp
+	}
+	return out
 }

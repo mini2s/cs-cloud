@@ -45,7 +45,7 @@ func prewarmRequest(ctx context.Context, cli *http.Client, base string, path str
 	logger.Info("prewarm request ok (%s) in %s", path, cost)
 }
 
-func prewarmServer(ctx context.Context, base string, dir string) {
+func prewarmServer(ctx context.Context, base string, dir string, tracker localserver.PrewarmTracker) {
 	fast := []string{
 		"/agent",
 		"/command",
@@ -55,6 +55,7 @@ func prewarmServer(ctx context.Context, base string, dir string) {
 	}
 	start := time.Now()
 	logger.Info("server prewarm started (workspace=%s)", dir)
+	tracker.MarkStarted(dir)
 	prewarmRequest(ctx, &http.Client{Timeout: 30 * time.Second}, base, "/session", dir)
 
 	var wg sync.WaitGroup
@@ -68,9 +69,10 @@ func prewarmServer(ctx context.Context, base string, dir string) {
 	}
 	wg.Wait()
 	logger.Info("server prewarm finished in %s", time.Since(start))
+	tracker.MarkCompleted(dir, nil)
 }
 
-func prewarmRecent(ctx context.Context, base string, dirs []string) {
+func prewarmRecent(ctx context.Context, base string, dirs []string, tracker localserver.PrewarmTracker) {
 	const limit = 2
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
@@ -84,7 +86,7 @@ func prewarmRecent(ctx context.Context, base string, dirs []string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			prewarmServer(ctx, base, dir)
+			prewarmServer(ctx, base, dir, tracker)
 		}()
 	}
 	wg.Wait()
@@ -183,7 +185,7 @@ func runDaemon(a *app.App) error {
 	}
 	recent = collectRecent(recent)
 	if len(recent) > 0 {
-		go prewarmRecent(context.Background(), srv.Manager().Endpoint(), recent)
+		go prewarmRecent(context.Background(), srv.Manager().Endpoint(), recent, srv)
 	}
 
 	go func() {
