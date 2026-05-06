@@ -87,6 +87,7 @@ func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 		{Method: http.MethodGet, Prefix: "/conversations/{id}/diff", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/diff")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/shell", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/shell")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/command", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command")},
+		{Method: http.MethodPost, Prefix: "/conversations/{id}/command/async", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command_async")},
 		{Method: http.MethodGet, Prefix: "/permissions", Rewrite: agent.RewriteTo("/permission")},
 		{Method: http.MethodPost, Prefix: "/permissions/{id}/reply", Rewrite: agent.RewritePermReply, Transform: agent.RenameJSONField("decision", "behavior")},
 		{Method: http.MethodGet, Prefix: "/questions", Rewrite: agent.RewriteTo("/question")},

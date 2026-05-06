@@ -110,6 +110,7 @@ func New(opts ...Option) *Server {
 	api.HandleFunc("GET /conversations/{id}/diff", s.handleConversationDiffDeprecated)
 	api.HandleFunc("POST /conversations/{id}/shell", s.handleProxy)
 	api.HandleFunc("POST /conversations/{id}/command", s.handleProxy)
+	api.HandleFunc("POST /conversations/{id}/command/async", s.handleProxy)
 
 	api.HandleFunc("GET /events", s.handleProxy)
 
