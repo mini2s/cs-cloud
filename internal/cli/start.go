@@ -63,6 +63,15 @@ func start(a *app.App) error {
 			}
 		}
 		printSuccess("Device token validated")
+
+		printInfo("Checking gateway connectivity...")
+		if gwErr := device.CheckGatewayConnectivity(ctx, info); gwErr != nil {
+			printError("Gateway connectivity check failed")
+			printKV("error", gwErr.Error())
+			printKV("hint", "Check your network connection and try again")
+			return gwErr
+		}
+		printSuccess("Gateway connectivity OK")
 	}
 
 	_ = a.SaveMode(mode)

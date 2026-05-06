@@ -49,6 +49,15 @@ func login(a *app.App) error {
 	printSuccess("Device registered")
 	printKV("device_id", info.DeviceID)
 
+	printInfo("Checking gateway connectivity...")
+	if gwErr := device.CheckGatewayConnectivity(ctx, info); gwErr != nil {
+		printError("Gateway connectivity check failed")
+		printKV("error", gwErr.Error())
+		printKV("hint", "Check your network connection and try again")
+		return gwErr
+	}
+	printSuccess("Gateway connectivity OK")
+
 	if running, _ := a.DaemonStatus(); running {
 		printInfo("Restarting daemon with new credentials...")
 		return restart(a)
