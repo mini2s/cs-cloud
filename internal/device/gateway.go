@@ -7,12 +7,41 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"cs-cloud/internal/platform"
 	"cs-cloud/internal/provider"
 	"cs-cloud/internal/version"
 )
+
+func CheckGatewayConnectivity(ctx context.Context, dev *DeviceInfo) error {
+	gatewayURL, err := AssignGateway(ctx, dev)
+	if err != nil {
+		return fmt.Errorf("gateway assignment failed: %w", err)
+	}
+
+	healthURL := strings.TrimRight(gatewayURL, "/") + "/health"
+	healthCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, healthURL, nil)
+	if err != nil {
+		return nil
+	}
+
+	resp, err := platform.HTTPClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("gateway unreachable (%s): %w", gatewayURL, err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("gateway returned %d", resp.StatusCode)
+	}
+
+	return nil
+}
 
 func setDeviceAuthHeaders(req *http.Request, device *DeviceInfo) {
 	req.Header.Set("Content-Type", "application/json")

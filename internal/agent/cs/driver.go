@@ -87,6 +87,7 @@ func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 		{Method: http.MethodGet, Prefix: "/conversations/{id}/diff", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/diff")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/shell", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/shell")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/command", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command")},
+		{Method: http.MethodPost, Prefix: "/conversations/{id}/command/async", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command_async")},
 		// 
 		// {Method: http.MethodGet, Prefix: "/conversations/{id}/children", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/children")},
 		// {Method: http.MethodPost, Prefix: "/conversations/{id}/fork", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/fork")},
@@ -112,5 +113,6 @@ func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 		// {Method: http.MethodGet, Prefix: "/agents/commands", Rewrite: agent.RewriteTo("/command")},
 		{Method: http.MethodGet, Prefix: "/agents/mcp", Rewrite: agent.RewriteTo("/mcp")},
 		{Method: http.MethodGet, Prefix: "/agents/lsp", Rewrite: agent.RewriteTo("/lsp")},
+
 	}
 }
