@@ -5,15 +5,17 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
 )
 
 var (
-	brandColor  = lipgloss.Color("#7D56F4")
-	successColor = lipgloss.Color("#04B575")
-	warnColor   = lipgloss.Color("#FFCC00")
-	errorColor  = lipgloss.Color("#FF5555")
-	dimColor    = lipgloss.Color("#6B6B6B")
-	keyColor    = lipgloss.Color("#B0B0B0")
+	brandColor   = compat.AdaptiveColor{Light: lipgloss.Color("#6A3FD9"), Dark: lipgloss.Color("#7D56F4")}
+	successColor = compat.AdaptiveColor{Light: lipgloss.Color("#028A51"), Dark: lipgloss.Color("#04B575")}
+	warnColor    = compat.AdaptiveColor{Light: lipgloss.Color("#B38600"), Dark: lipgloss.Color("#FFCC00")}
+	errorColor   = compat.AdaptiveColor{Light: lipgloss.Color("#CC3333"), Dark: lipgloss.Color("#FF5555")}
+	dimColor     = compat.AdaptiveColor{Light: lipgloss.Color("#555555"), Dark: lipgloss.Color("#6B6B6B")}
+	keyColor     = compat.AdaptiveColor{Light: lipgloss.Color("#555555"), Dark: lipgloss.Color("#B0B0B0")}
+	fgColor      = compat.AdaptiveColor{Light: lipgloss.Color("#1A1A1A"), Dark: lipgloss.Color("#FFFFFF")}
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -22,14 +24,14 @@ var (
 
 	headingStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FFFFFF"))
+			Foreground(fgColor)
 
 	successStyle = lipgloss.NewStyle().Foreground(successColor)
 	warnStyle    = lipgloss.NewStyle().Foreground(warnColor)
 	errorStyle   = lipgloss.NewStyle().Foreground(errorColor)
 	dimStyle     = lipgloss.NewStyle().Foreground(dimColor)
 	keyStyle     = lipgloss.NewStyle().Foreground(keyColor)
-	valueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	valueStyle   = lipgloss.NewStyle().Foreground(fgColor)
 
 	bulletSuccess = successStyle.Render("  ✓")
 	bulletWarn    = warnStyle.Render("  ⚠")
