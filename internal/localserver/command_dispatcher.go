@@ -157,7 +157,7 @@ func (d *CommandDispatcher) execute(req *commandRequest) {
 	entry.completedAt = time.Now()
 	d.mu.Unlock()
 
-	d.reportResult(req.CommandID, entry)
+	go d.reportResult(req.CommandID, entry)
 }
 
 func (d *CommandDispatcher) execUpgrade(req *commandRequest) (any, error) {

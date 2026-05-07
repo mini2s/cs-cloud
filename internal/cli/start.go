@@ -19,13 +19,17 @@ import (
 const readyTimeout = 30 * time.Second
 
 func start(a *app.App) error {
-	running, pid := a.DaemonStatus()
+	running, pid, _ := a.DaemonStatus()
 	if running {
 		url, _ := a.ServerURL()
 		printWarn("cs-cloud is already running")
 		printKV("pid", fmt.Sprintf("%d", pid))
 		printKV("url", url)
 		return nil
+	}
+
+	if cleaned := a.ForceCleanupStale(); cleaned {
+		printInfo("Cleaned up stale daemon process")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

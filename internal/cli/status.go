@@ -10,7 +10,7 @@ import (
 )
 
 func status(a *app.App) error {
-	running, pid := a.DaemonStatus()
+	running, pid, reason := a.DaemonStatus()
 	cred, err := provider.LoadCredentials()
 	if err != nil {
 		return err
@@ -67,7 +67,11 @@ func status(a *app.App) error {
 			fmt.Printf("  %s\n", valueStyle.Render(webURL))
 		}
 	} else {
-		printInfo("Stopped")
+		if reason != "" {
+			printWarn("Stopped (%s)", reason)
+		} else {
+			printInfo("Stopped")
+		}
 		printSection("Developer info")
 		printKV("root", a.RootDir())
 		printKV("cloud_url", a.CloudBaseURL())

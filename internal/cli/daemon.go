@@ -3,12 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 
@@ -21,76 +19,6 @@ import (
 	"cs-cloud/internal/version"
 )
 
-func prewarmRequest(ctx context.Context, cli *http.Client, base string, path string, dir string) {
-	begin := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
-	if err != nil {
-		logger.Warn("prewarm request build failed (%s): %v", path, err)
-		return
-	}
-	req.Header.Set("x-opencode-directory", dir)
-
-	resp, err := cli.Do(req)
-	if err != nil {
-		logger.Warn("prewarm request failed (%s) after %s: %v", path, time.Since(begin), err)
-		return
-	}
-	resp.Body.Close()
-
-	cost := time.Since(begin)
-	if resp.StatusCode >= http.StatusBadRequest {
-		logger.Warn("prewarm request returned %d (%s) in %s", resp.StatusCode, path, cost)
-		return
-	}
-	logger.Info("prewarm request ok (%s) in %s", path, cost)
-}
-
-func prewarmServer(ctx context.Context, base string, dir string, tracker localserver.PrewarmTracker) {
-	fast := []string{
-		"/agent",
-		"/command",
-		"/provider/capabilities",
-		"/vcs",
-		"/runtime/find/file?query=package&dirs=true&limit=20",
-	}
-	start := time.Now()
-	logger.Info("server prewarm started (workspace=%s)", dir)
-	tracker.MarkStarted(dir)
-	prewarmRequest(ctx, &http.Client{Timeout: 30 * time.Second}, base, "/session", dir)
-
-	var wg sync.WaitGroup
-	for _, path := range fast {
-		path := path
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			prewarmRequest(ctx, &http.Client{Timeout: 15 * time.Second}, base, path, dir)
-		}()
-	}
-	wg.Wait()
-	logger.Info("server prewarm finished in %s", time.Since(start))
-	tracker.MarkCompleted(dir, nil)
-}
-
-func prewarmRecent(ctx context.Context, base string, dirs []string, tracker localserver.PrewarmTracker) {
-	const limit = 2
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for _, dir := range dirs {
-		if dir == "" {
-			continue
-		}
-		dir := dir
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			prewarmServer(ctx, base, dir, tracker)
-		}()
-	}
-	wg.Wait()
-}
 
 func collectRecent(dirs []string) []string {
 	seen := map[string]struct{}{}
@@ -135,6 +63,10 @@ func runDaemon(a *app.App) error {
 	if err != nil {
 		logger.Error("invalid port: %v", err)
 		return err
+	}
+
+	if err := a.WritePID(os.Getpid()); err != nil {
+		logger.Warn("failed to write pid: %v", err)
 	}
 
 	logger.Info("[debug] initializing local server...")
@@ -189,8 +121,8 @@ func runDaemon(a *app.App) error {
 		recent = append([]string{dir}, recent...)
 	}
 	recent = collectRecent(recent)
-	if len(recent) > 0 {
-		go prewarmRecent(context.Background(), srv.Manager().Endpoint(), recent, srv)
+	for _, d := range recent {
+		srv.TriggerPrewarmIfNeeded(d)
 	}
 
 	go func() {
@@ -244,6 +176,9 @@ func runDaemon(a *app.App) error {
 
 		restarter := func() {
 			logger.Info("[daemon] self-restart triggered")
+			logger.Info("[daemon] cancelling cloud context...")
+			cloudCancel()
+			time.Sleep(2 * time.Second)
 			app.SelfRestart(a)
 		}
 		dispatcher.BindRestarter(restarter)
@@ -302,5 +237,7 @@ func runDaemon(a *app.App) error {
 	a.RemoveAgentPID()
 
 	logger.Info("daemon stopped")
+	logger.Sync()
+	os.Exit(0)
 	return nil
 }

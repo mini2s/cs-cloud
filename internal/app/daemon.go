@@ -1,11 +1,15 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (a *App) pidFile() string {
@@ -108,16 +112,81 @@ func (a *App) RemoveAgentPID() {
 	os.Remove(a.agentPidFile())
 }
 
-func (a *App) DaemonStatus() (bool, int) {
+func (a *App) DaemonStatus() (bool, int, string) {
 	pid, err := a.ReadPID()
 	if err != nil {
-		return false, 0
+		return false, 0, "pid file not found"
 	}
 	if !a.IsProcessRunning(pid) {
-		a.RemovePID()
-		return false, 0
+		return false, pid, fmt.Sprintf("process %d not running", pid)
 	}
-	return true, pid
+	running, state, _ := a.IsRunning()
+	if !running {
+		return false, pid, fmt.Sprintf("unexpected state %q", state)
+	}
+	if !a.healthCheck() {
+		return false, pid, "health check failed"
+	}
+	return true, pid, ""
+}
+
+func (a *App) healthCheck() bool {
+	serverURL, err := a.ServerURL()
+	if err != nil || serverURL == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/v1/runtime/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func (a *App) ForceCleanupStale() bool {
+	cleaned := false
+	if pid, err := a.ReadPID(); err == nil && pid > 0 && a.IsProcessRunning(pid) {
+		a.forceKillStale(pid)
+		cleaned = true
+	}
+	if agentPID, err := a.ReadAgentPID(); err == nil && agentPID > 0 && a.IsProcessRunning(agentPID) {
+		a.forceKillStale(agentPID)
+		cleaned = true
+	}
+	if killOrphanProcesses(a.rootDir) {
+		cleaned = true
+	}
+	a.cleanupAllStateFiles()
+	return cleaned
+}
+
+func (a *App) cleanupAllStateFiles() {
+	a.RemovePID()
+	a.RemoveAgentPID()
+	a.RemoveStopFile()
+	a.SaveState("stopped")
+	a.SaveServerURL("")
+}
+
+func (a *App) forceKillStale(pid int) {
+	if !a.IsProcessRunning(pid) {
+		return
+	}
+	forceKillProcess(pid)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !a.IsProcessRunning(pid) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	forceKillProcess(pid)
 }
 
 func (a *App) SaveMode(mode string) error {
@@ -200,4 +269,32 @@ func (a *App) SaveServerURL(raw string) error {
 		return nil
 	}
 	return os.WriteFile(a.serverFile(), []byte(raw+"\n"), 0o644)
+}
+
+func dataDirFromArgs(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--data-dir" && i+1 < len(args):
+			return args[i+1]
+		case len(args[i]) > 11 && args[i][:11] == "--data-dir=":
+			return args[i][11:]
+		}
+	}
+	return ""
+}
+
+func rootDirFromDataDir(dataDir string) string {
+	if dataDir != "" {
+		if !filepath.IsAbs(dataDir) {
+			if abs, err := filepath.Abs(dataDir); err == nil {
+				dataDir = abs
+			}
+		}
+		return filepath.Join(dataDir, "cs-cloud")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".costrict", "cs-cloud")
 }

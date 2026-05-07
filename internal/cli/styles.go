@@ -8,12 +8,12 @@ import (
 )
 
 var (
-	brandColor  = lipgloss.Color("#7D56F4")
+	brandColor   = lipgloss.Color("#7D56F4")
 	successColor = lipgloss.Color("#04B575")
-	warnColor   = lipgloss.Color("#FFCC00")
-	errorColor  = lipgloss.Color("#FF5555")
-	dimColor    = lipgloss.Color("#6B6B6B")
-	keyColor    = lipgloss.Color("#B0B0B0")
+	warnColor    = lipgloss.Color("#FFCC00")
+	errorColor   = lipgloss.Color("#FF5555")
+	dimColor     = lipgloss.Color("#6B6B6B")
+	keyColor     = lipgloss.Color("#B0B0B0")
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -21,15 +21,14 @@ var (
 			MarginBottom(1)
 
 	headingStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#FFFFFF"))
+			Bold(true)
 
 	successStyle = lipgloss.NewStyle().Foreground(successColor)
 	warnStyle    = lipgloss.NewStyle().Foreground(warnColor)
 	errorStyle   = lipgloss.NewStyle().Foreground(errorColor)
 	dimStyle     = lipgloss.NewStyle().Foreground(dimColor)
 	keyStyle     = lipgloss.NewStyle().Foreground(keyColor)
-	valueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	valueStyle   = lipgloss.NewStyle()
 
 	bulletSuccess = successStyle.Render("  ✓")
 	bulletWarn    = warnStyle.Render("  ⚠")

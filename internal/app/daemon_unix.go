@@ -4,6 +4,9 @@ package app
 
 import (
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -63,4 +66,42 @@ func forceKillTree(pid int) {
 		return
 	}
 	_ = proc.Kill()
+}
+
+func forceKillProcess(pid int) {
+	forceKillTree(pid)
+}
+
+func killOrphanProcesses(rootDir string) bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	killed := false
+	procs, _ := os.ReadDir("/proc")
+	for _, p := range procs {
+		if !p.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(p.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		link, err := os.Readlink(filepath.Join("/proc", p.Name(), "exe"))
+		if err != nil || link != exe {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", p.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		args := strings.Split(string(cmdline), "\x00")
+		dd := dataDirFromArgs(args)
+		if rootDirFromDataDir(dd) != rootDir {
+			continue
+		}
+		forceKillTree(pid)
+		killed = true
+	}
+	return killed
 }

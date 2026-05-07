@@ -350,11 +350,11 @@ func (a *Agent) subscribeEvents(ctx context.Context) {
 			}
 			if err == io.EOF {
 				logger.Info("cs event stream closed, reconnecting")
-				time.Sleep(time.Second)
-				go a.subscribeEvents(ctx)
-				return
+			} else {
+				logger.Warn("cs event read error: %v, reconnecting", err)
 			}
-			logger.Error("cs event read error: %v", err)
+			time.Sleep(time.Second)
+			go a.subscribeEvents(ctx)
 			return
 		}
 
