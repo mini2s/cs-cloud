@@ -98,6 +98,16 @@ func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/shell", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/shell")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/command", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/command/async", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command_async")},
+		// 
+		// {Method: http.MethodGet, Prefix: "/conversations/{id}/children", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/children")},
+		// {Method: http.MethodPost, Prefix: "/conversations/{id}/fork", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/fork")},
+		{Method: http.MethodPost, Prefix: "/conversations/{id}/revert", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/revert")},
+		{Method: http.MethodPost, Prefix: "/conversations/{id}/summarize", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/summarize")},
+		// {Method: http.MethodPost, Prefix: "/conversations/{id}/unrevert", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/unrevert")},
+		// {Method: http.MethodGet, Prefix: "/config/providers", Rewrite: agent.RewriteTo("/config/providers")},
+		// {Method: http.MethodGet, Prefix: "/file", Rewrite: agent.RewriteTo("/file")},
+		// {Method: http.MethodGet, Prefix: "/file/status", Rewrite: agent.RewriteTo("/file/status")},
+		//
 		{Method: http.MethodGet, Prefix: "/permissions", Rewrite: agent.RewriteTo("/permission")},
 		{Method: http.MethodPost, Prefix: "/permissions/{id}/reply", Rewrite: agent.RewritePermReply, Transform: agent.RenameJSONField("decision", "reply")},
 		{Method: http.MethodGet, Prefix: "/questions", Rewrite: agent.RewriteTo("/question")},
@@ -113,5 +123,6 @@ func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 		// {Method: http.MethodGet, Prefix: "/agents/commands", Rewrite: agent.RewriteTo("/command")},
 		{Method: http.MethodGet, Prefix: "/agents/mcp", Rewrite: agent.RewriteTo("/mcp")},
 		{Method: http.MethodGet, Prefix: "/agents/lsp", Rewrite: agent.RewriteTo("/lsp")},
+
 	}
 }

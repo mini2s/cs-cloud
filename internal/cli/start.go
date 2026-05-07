@@ -36,6 +36,10 @@ func start(a *app.App) error {
 	defer stop()
 
 	mode := parseMode()
+	port, err := parsePort()
+	if err != nil {
+		return err
+	}
 
 	if mode == "cloud" {
 		info, err := registerWithLogin(ctx, a)
@@ -99,6 +103,9 @@ func start(a *app.App) error {
 	}
 	if d := platform.DataDir(); d != "" {
 		daemonArgs = append(daemonArgs, "--data-dir", d)
+	}
+	if port > 0 {
+		daemonArgs = append(daemonArgs, "--port", fmt.Sprintf("%d", port))
 	}
 	if platform.NoAutoUpgrade() {
 		daemonArgs = append(daemonArgs, "--no-auto-upgrade")

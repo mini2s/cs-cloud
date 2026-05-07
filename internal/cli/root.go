@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"cs-cloud/internal/app"
@@ -51,6 +52,14 @@ func commandArgs() []string {
 		case args[i] == "--data-dir" && i+1 < len(args):
 			i++
 		case len(args[i]) > 11 && args[i][:11] == "--data-dir=":
+		case (args[i] == "--mode" || args[i] == "-m") && i+1 < len(args):
+			i++
+		case strings.HasPrefix(args[i], "--mode="):
+		case strings.HasPrefix(args[i], "-m="):
+		case (args[i] == "--port" || args[i] == "-p") && i+1 < len(args):
+			i++
+		case strings.HasPrefix(args[i], "--port="):
+		case strings.HasPrefix(args[i], "-p="):
 		case args[i] == "--no-auto-upgrade":
 		default:
 			rest = append(rest, args[i])
@@ -72,6 +81,30 @@ func parseMode() string {
 		}
 	}
 	return "cloud"
+}
+
+func parsePort() (int, error) {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		var raw string
+		switch {
+		case (args[i] == "--port" || args[i] == "-p") && i+1 < len(args):
+			raw = args[i+1]
+		case strings.HasPrefix(args[i], "--port="):
+			raw = args[i][7:]
+		case strings.HasPrefix(args[i], "-p="):
+			raw = args[i][3:]
+		}
+		if raw == "" {
+			continue
+		}
+		port, err := strconv.Atoi(raw)
+		if err != nil || port < 0 || port > 65535 {
+			return 0, fmt.Errorf("invalid port: %s", raw)
+		}
+		return port, nil
+	}
+	return 0, nil
 }
 
 func dispatch(a *app.App) error {
@@ -130,6 +163,7 @@ func printUsage() {
 		{"--auth-path", "Path to auth.json (default: ~/.costrict/share/auth.json)"},
 		{"--data-dir", "Base data directory (default: ~/.costrict)"},
 		{"--mode, -m", "Daemon mode: cloud (default) or local"},
+		{"--port, -p", "Local server port (default: random available port)"},
 		{"--no-auto-upgrade", "Disable auto-upgrade on cloud command"},
 	}))
 

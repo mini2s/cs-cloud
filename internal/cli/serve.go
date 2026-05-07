@@ -17,6 +17,11 @@ func serve(a *app.App) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	port, err := parsePort()
+	if err != nil {
+		return err
+	}
+
 	srv := localserver.New(localserver.WithVersion(version.Get()), localserver.WithConfig(a.Config()), localserver.WithRootDir(a.RootDir()))
 
 	if err := srv.Manager().InitDefaultAgent(ctx, a.Config().DefaultAgent, a.Config().AgentCommand, a.Config().AgentWorkspace, a.Config().AgentEnv); err != nil {
@@ -24,7 +29,7 @@ func serve(a *app.App) error {
 	}
 	printSuccess("Agent started (endpoint=%s)", srv.Manager().Endpoint())
 
-	if err := srv.Start("127.0.0.1:0"); err != nil {
+	if err := srv.Start(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
 		return err
 	}
 	if err := a.SaveServerURL(srv.URL()); err != nil {

@@ -72,6 +72,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.FlushInterval = -1
 
 	headerMap := d.HeaderMap()
 
@@ -94,6 +95,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
+		stripCORSHeaders(resp.Header)
 		if resp.StatusCode >= 400 {
 			body, readErr := io.ReadAll(resp.Body)
 			if readErr != nil {

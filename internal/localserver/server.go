@@ -71,13 +71,24 @@ func New(opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	api := http.NewServeMux()
-	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", api))
+	mux.Handle("/api/v1/", corsMiddleware(http.StripPrefix("/api/v1", api)))
+
+	// CORS-friendly 404 for paths outside /api/v1/ (e.g. wrong baseUrl)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w.Header(), r.Header.Get("Origin"))
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(w, r)
+	})
 
 	api.HandleFunc("GET /runtime/health", s.handleHealth)
 	api.HandleFunc("GET /runtime/config", s.handleRuntimeConfig)
 	api.HandleFunc("GET /runtime/files", s.handleFileList)
 	api.HandleFunc("GET /runtime/files/meta", s.handleFileMeta)
 	api.HandleFunc("GET /runtime/files/content", s.handleFileContent)
+	api.HandleFunc("PUT /runtime/files/content", s.handleFileWrite)
 	api.HandleFunc("GET /runtime/find/file", s.handleFindFiles)
 	api.HandleFunc("GET /runtime/path", s.handlePath)
 	api.HandleFunc("GET /runtime/vcs", s.handleVcs)
@@ -113,7 +124,14 @@ func New(opts ...Option) *Server {
 	api.HandleFunc("POST /conversations/{id}/shell", s.handleProxy)
 	api.HandleFunc("POST /conversations/{id}/command", s.handleProxy)
 	api.HandleFunc("POST /conversations/{id}/command/async", s.handleProxy)
-
+	// api.HandleFunc("GET /conversations/{id}/children", s.handleProxy)
+	// api.HandleFunc("POST /conversations/{id}/fork", s.handleProxy)
+	api.HandleFunc("POST /conversations/{id}/revert", s.handleProxy)
+	api.HandleFunc("POST /conversations/{id}/summarize", s.handleProxy)
+	// api.HandleFunc("POST /conversations/{id}/unrevert", s.handleProxy)
+	// api.HandleFunc("GET /config/providers", s.handleProxy)
+	// api.HandleFunc("GET /file", s.handleProxy)
+	// api.HandleFunc("GET /file/status", s.handleProxy)
 	api.HandleFunc("GET /events", s.handleProxy)
 
 	api.HandleFunc("GET /agents/favorites", s.handleFavoriteList)

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -58,6 +59,11 @@ func runDaemon(a *app.App) error {
 
 	mode := a.LoadMode()
 	a.SaveArgs(os.Args[1:])
+	port, err := parsePort()
+	if err != nil {
+		logger.Error("invalid port: %v", err)
+		return err
+	}
 
 	if err := a.WritePID(os.Getpid()); err != nil {
 		logger.Warn("failed to write pid: %v", err)
@@ -88,7 +94,7 @@ func runDaemon(a *app.App) error {
 		}
 	}
 
-	if err := srv.Start("127.0.0.1:0"); err != nil {
+	if err := srv.Start(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
 		logger.Error("failed to start server: %v", err)
 		return err
 	}
