@@ -69,6 +69,11 @@ func (s *Server) buildInitStatus(dir string) initStatusData {
 	agentInfo := s.buildAgentInfo()
 	prewarmInfo := s.buildPrewarmInfo(dir)
 
+	if prewarmInfo.Status == "" {
+		s.TriggerPrewarmIfNeeded(dir)
+		prewarmInfo = s.buildPrewarmInfo(dir)
+	}
+
 	ready := agentInfo.Healthy &&
 		(prewarmInfo.Status == "completed" || prewarmInfo.Status == "")
 
