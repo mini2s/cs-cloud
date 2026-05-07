@@ -68,7 +68,7 @@ func status(a *app.App) error {
 		}
 	} else {
 		if reason != "" {
-			printWarn("Stopped (" + reason + ")")
+			printWarn("Stopped (%s)", reason)
 		} else {
 			printInfo("Stopped")
 		}
