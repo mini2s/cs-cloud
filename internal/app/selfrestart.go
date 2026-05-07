@@ -32,10 +32,10 @@ func SelfRestart(a *App) error {
 	logger.Info("[selfrestart] launching new process: %s %v", exe, args)
 
 	cmd := newRestartCmd(exe, args)
-	logFd, logErr := a.OpenLogFile()
-	if logErr == nil {
-		cmd.Stdout = logFd
-		cmd.Stderr = logFd
+	nullFd, nullErr := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if nullErr == nil {
+		cmd.Stdout = nullFd
+		cmd.Stderr = nullFd
 	}
 
 	if err := cmd.Start(); err != nil {

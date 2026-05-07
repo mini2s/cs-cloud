@@ -290,15 +290,14 @@ func (s *Server) prewarmDir(ctx context.Context, dir string) {
 
 	s.prewarmRequest(ctx, &http.Client{Timeout: 30 * time.Second}, base, "/session", dir)
 
-	fast := []string{
-		"/agent",
-		"/command",
-		"/provider/capabilities",
-		"/vcs",
-		"/runtime/find/file?query=package&dirs=true&limit=20",
+	paths := s.manager.PrewarmPaths()
+	if len(paths) == 0 {
+		s.MarkCompleted(dir, nil)
+		return
 	}
+
 	var wg sync.WaitGroup
-	for _, path := range fast {
+	for _, path := range paths {
 		path := path
 		wg.Add(1)
 		go func() {
@@ -317,7 +316,9 @@ func (s *Server) prewarmRequest(ctx context.Context, cli *http.Client, base stri
 		logger.Warn("prewarm request build failed (%s): %v", path, err)
 		return
 	}
-	req.Header.Set("x-opencode-directory", dir)
+	if hdr := s.manager.WorkspaceHeaderName(); hdr != "" {
+		req.Header.Set(hdr, dir)
+	}
 
 	resp, err := cli.Do(req)
 	if err != nil {

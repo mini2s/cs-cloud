@@ -87,12 +87,6 @@ func start(a *app.App) error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	logFd, err := a.OpenLogFile()
-	if err != nil {
-		return fmt.Errorf("open log file: %w", err)
-	}
-	defer logFd.Close()
-
 	nullFd, err := openNullDevice()
 	if err != nil {
 		return fmt.Errorf("open null device: %w", err)
@@ -112,8 +106,8 @@ func start(a *app.App) error {
 
 	cmd := newDaemonCmd(exe, daemonArgs)
 	cmd.Stdin = nullFd
-	cmd.Stdout = logFd
-	cmd.Stderr = logFd
+	cmd.Stdout = nullFd
+	cmd.Stderr = nullFd
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start daemon: %w", err)
 	}
