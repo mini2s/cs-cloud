@@ -176,8 +176,8 @@ func TestInitStatusUnknownDirectory(t *testing.T) {
 	data := resp.Data.(map[string]any)
 	prewarm := data["prewarm"].(map[string]any)
 
-	if prewarm["status"] != "" {
-		t.Errorf("prewarm.status=%v, want empty for untracked dir", prewarm["status"])
+	if prewarm["status"] != "in_progress" {
+		t.Errorf("prewarm.status=%v, want in_progress for first-time dir", prewarm["status"])
 	}
 }
 
