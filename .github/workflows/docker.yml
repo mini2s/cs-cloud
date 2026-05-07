@@ -1,0 +1,113 @@
+name: Docker Build and Push
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to build'
+        required: true
+        default: 'main'
+        type: string
+      cs_version:
+        description: 'cs release version (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+      push:
+        description: 'Push image to registry'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout cs-cloud
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Resolve cs version
+        id: cs-version
+        run: |
+          CS_VER="${{ inputs.cs_version }}"
+          if [ "$CS_VER" = "latest" ] || [ -z "$CS_VER" ]; then
+            CS_VER=$(curl -fsSL https://api.github.com/repos/zgsm-sangfor/opencode/releases/latest | jq -r '.tag_name')
+          fi
+          echo "version=$CS_VER"
+          echo "version=$CS_VER" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version metadata
+        id: meta-resolver
+        run: |
+          REF="${{ inputs.ref }}"
+          # If ref is a tag like v1.2.3, use it as version
+          if echo "$REF" | grep -qE '^v?[0-9]'; then
+            VERSION="$REF"
+          else
+            # For branches, use branch name + short sha
+            VERSION="${REF}-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.ref }}
+            type=raw,value=latest,enable=${{ inputs.ref == 'main' }}
+
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.meta-resolver.outputs.version }}
+            COMMIT=${{ steps.meta-resolver.outputs.commit }}
+            BUILD_TIME=${{ steps.meta-resolver.outputs.build_time }}
+            CS_VERSION=${{ steps.cs-version.outputs.version }}
+
+      - name: Generate artifact attestation
+        if: ${{ inputs.push }}
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
