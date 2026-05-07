@@ -381,9 +381,9 @@ func (dp downloadProgress) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (dp downloadProgress) View() string {
 	bar := dp.prog.ViewAs(dp.pct)
 	pct := fmt.Sprintf("%5.1f%%", dp.pct*100)
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#B0B0B0"})
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#B0B0B0"))
 	if dp.finished {
-		return labelStyle.Render("  Downloading") + " " + bar + " " + lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#028A51", Dark: "#04B575"}).Render("done")
+		return labelStyle.Render("  Downloading") + " " + bar + " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575")).Render("done")
 	}
 	return labelStyle.Render("  Downloading") + " " + bar + " " + pct
 }
