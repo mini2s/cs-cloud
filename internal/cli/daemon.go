@@ -59,6 +59,10 @@ func runDaemon(a *app.App) error {
 	mode := a.LoadMode()
 	a.SaveArgs(os.Args[1:])
 
+	if err := a.WritePID(os.Getpid()); err != nil {
+		logger.Warn("failed to write pid: %v", err)
+	}
+
 	logger.Info("[debug] initializing local server...")
 	srv := localserver.New(localserver.WithVersion(version.Get()), localserver.WithConfig(a.Config()), localserver.WithRootDir(a.RootDir()))
 
@@ -166,6 +170,9 @@ func runDaemon(a *app.App) error {
 
 		restarter := func() {
 			logger.Info("[daemon] self-restart triggered")
+			logger.Info("[daemon] cancelling cloud context...")
+			cloudCancel()
+			time.Sleep(2 * time.Second)
 			app.SelfRestart(a)
 		}
 		dispatcher.BindRestarter(restarter)
@@ -224,5 +231,7 @@ func runDaemon(a *app.App) error {
 	a.RemoveAgentPID()
 
 	logger.Info("daemon stopped")
+	logger.Sync()
+	os.Exit(0)
 	return nil
 }

@@ -28,6 +28,10 @@ func start(a *app.App) error {
 		return nil
 	}
 
+	if cleaned := a.ForceCleanupStale(); cleaned {
+		printInfo("Cleaned up stale daemon process")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
