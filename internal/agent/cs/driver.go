@@ -71,6 +71,16 @@ func (d *Driver) HeaderMap() map[string]string {
 	}
 }
 
+func (d *Driver) PrewarmPaths() []string {
+	return []string{
+		"/agent",
+		"/command",
+		"/provider/capabilities",
+		"/vcs",
+		"/runtime/find/file?query=package&dirs=true&limit=20",
+	}
+}
+
 func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 	return []agent.ProxyRoute{
 		{Method: http.MethodPost, Prefix: "/conversations", Rewrite: agent.RewriteTo("/session")},

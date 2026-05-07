@@ -19,11 +19,7 @@ func logs(a *app.App) error {
 	}
 	defer f.Close()
 
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
+	lines := scanLogLines(f)
 
 	start := len(lines) - 100
 	if start < 0 {
@@ -52,11 +48,7 @@ func tailLogs(a *app.App, follow bool) {
 		return
 	}
 
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
+	lines := scanLogLines(f)
 	f.Close()
 
 	start := len(lines) - 100
@@ -88,14 +80,68 @@ func tailLogs(a *app.App, follow bool) {
 			continue
 		}
 		f.Seek(size, 0)
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			fmt.Println(scanner.Text())
-		}
+		scanAndPrintLines(f)
 		info2, _ := f.Stat()
 		if info2 != nil {
 			size = info2.Size()
 		}
 		f.Close()
 	}
+}
+
+func scanLogLines(f *os.File) []string {
+	var lines []string
+	buf := make([]byte, 0, 128*1024)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(buf, 1024*1024)
+	scanner.Split(splitLogLines)
+	for scanner.Scan() {
+		if text := scanner.Text(); text != "" {
+			lines = append(lines, text)
+		}
+	}
+	return lines
+}
+
+func scanAndPrintLines(f *os.File) {
+	buf := make([]byte, 0, 128*1024)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(buf, 1024*1024)
+	scanner.Split(splitLogLines)
+	for scanner.Scan() {
+		if text := scanner.Text(); text != "" {
+			fmt.Println(text)
+		}
+	}
+}
+
+func splitLogLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	i := indexNewline(data)
+	if i >= 0 {
+		return i + 1, trimCR(data[:i]), nil
+	}
+	if atEOF {
+		return len(data), trimCR(data), nil
+	}
+	return 0, nil, nil
+}
+
+func trimCR(data []byte) []byte {
+	end := len(data)
+	for end > 0 && data[end-1] == '\r' {
+		end--
+	}
+	return data[:end]
+}
+
+func indexNewline(data []byte) int {
+	for i, b := range data {
+		if b == '\n' {
+			return i
+		}
+	}
+	return -1
 }

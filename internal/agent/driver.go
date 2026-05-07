@@ -20,6 +20,7 @@ type Driver interface {
 	ProxyRoutes() []ProxyRoute
 	HeaderMap() map[string]string
 	FetchCommands(endpoint string) ([]SlashCommand, error)
+	PrewarmPaths() []string
 }
 
 type DetectedAgent struct {

@@ -198,6 +198,30 @@ func (m *AgentManager) DefaultBackend() string {
 	return ""
 }
 
+func (m *AgentManager) PrewarmPaths() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.agents {
+		if d, ok := m.drivers[a.Backend()]; ok {
+			return d.PrewarmPaths()
+		}
+	}
+	return nil
+}
+
+func (m *AgentManager) WorkspaceHeaderName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.agents {
+		if d, ok := m.drivers[a.Backend()]; ok {
+			for _, v := range d.HeaderMap() {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
 func (m *AgentManager) InitDefaultAgent(ctx context.Context, agentType string, agentCommand string, agentWorkspace string, agentEnv map[string]string) error {
 	if agentType == "" {
 		agentType = "cs"
