@@ -3,7 +3,7 @@ package cli
 import "cs-cloud/internal/app"
 
 func restart(a *app.App) error {
-	running, _ := a.DaemonStatus()
+	running, _, _ := a.DaemonStatus()
 	if running {
 		printInfo("Stopping previous instance...")
 		stopped := a.StopDaemon()

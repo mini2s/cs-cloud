@@ -16,8 +16,13 @@ func (a *App) IsProcessRunning(pid int) bool {
 	if err != nil {
 		return false
 	}
-	syscall.CloseHandle(handle)
-	return true
+	defer syscall.CloseHandle(handle)
+	var exitCode uint32
+	err = syscall.GetExitCodeProcess(handle, &exitCode)
+	if err != nil {
+		return false
+	}
+	return exitCode == 259
 }
 
 func (a *App) StopDaemon() bool {

@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -109,19 +112,41 @@ func (a *App) RemoveAgentPID() {
 	os.Remove(a.agentPidFile())
 }
 
-func (a *App) DaemonStatus() (bool, int) {
+func (a *App) DaemonStatus() (bool, int, string) {
 	pid, err := a.ReadPID()
 	if err != nil {
-		return false, 0
+		return false, 0, "pid file not found"
 	}
 	if !a.IsProcessRunning(pid) {
-		return false, pid
+		return false, pid, fmt.Sprintf("process %d not running", pid)
 	}
-	running, _, _ := a.IsRunning()
+	running, state, _ := a.IsRunning()
 	if !running {
-		return false, pid
+		return false, pid, fmt.Sprintf("unexpected state %q", state)
 	}
-	return true, pid
+	if !a.healthCheck() {
+		return false, pid, "health check failed"
+	}
+	return true, pid, ""
+}
+
+func (a *App) healthCheck() bool {
+	serverURL, err := a.ServerURL()
+	if err != nil || serverURL == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/v1/runtime/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 func (a *App) ForceCleanupStale() bool {

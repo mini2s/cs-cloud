@@ -58,7 +58,7 @@ func login(a *app.App) error {
 	}
 	printSuccess("Gateway connectivity OK")
 
-	if running, _ := a.DaemonStatus(); running {
+	if running, _, _ := a.DaemonStatus(); running {
 		printInfo("Restarting daemon with new credentials...")
 		return restart(a)
 	}

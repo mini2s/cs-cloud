@@ -19,7 +19,7 @@ import (
 const readyTimeout = 30 * time.Second
 
 func start(a *app.App) error {
-	running, pid := a.DaemonStatus()
+	running, pid, _ := a.DaemonStatus()
 	if running {
 		url, _ := a.ServerURL()
 		printWarn("cs-cloud is already running")
