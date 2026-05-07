@@ -159,7 +159,7 @@ func (a *App) ForceCleanupStale() bool {
 		a.forceKillStale(agentPID)
 		cleaned = true
 	}
-	if killOrphanProcesses() {
+	if killOrphanProcesses(a.rootDir) {
 		cleaned = true
 	}
 	a.cleanupAllStateFiles()
@@ -269,4 +269,32 @@ func (a *App) SaveServerURL(raw string) error {
 		return nil
 	}
 	return os.WriteFile(a.serverFile(), []byte(raw+"\n"), 0o644)
+}
+
+func dataDirFromArgs(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--data-dir" && i+1 < len(args):
+			return args[i+1]
+		case len(args[i]) > 11 && args[i][:11] == "--data-dir=":
+			return args[i][11:]
+		}
+	}
+	return ""
+}
+
+func rootDirFromDataDir(dataDir string) string {
+	if dataDir != "" {
+		if !filepath.IsAbs(dataDir) {
+			if abs, err := filepath.Abs(dataDir); err == nil {
+				dataDir = abs
+			}
+		}
+		return filepath.Join(dataDir, "cs-cloud")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".costrict", "cs-cloud")
 }

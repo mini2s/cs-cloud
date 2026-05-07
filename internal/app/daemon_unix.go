@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -71,7 +72,7 @@ func forceKillProcess(pid int) {
 	forceKillTree(pid)
 }
 
-func killOrphanProcesses() bool {
+func killOrphanProcesses(rootDir string) bool {
 	exe, err := os.Executable()
 	if err != nil {
 		return false
@@ -88,6 +89,15 @@ func killOrphanProcesses() bool {
 		}
 		link, err := os.Readlink(filepath.Join("/proc", p.Name(), "exe"))
 		if err != nil || link != exe {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", p.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		args := strings.Split(string(cmdline), "\x00")
+		dd := dataDirFromArgs(args)
+		if rootDirFromDataDir(dd) != rootDir {
 			continue
 		}
 		forceKillTree(pid)
