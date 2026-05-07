@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"cs-cloud/internal/logger"
 )
@@ -42,14 +43,26 @@ func SelfRestart(a *App) error {
 		return fmt.Errorf("start new process: %w", err)
 	}
 
-	if logFd != nil {
-		go func() {
-			cmd.Wait()
-			logFd.Close()
-		}()
+	newPid := cmd.Process.Pid
+	logger.Info("[selfrestart] new process started (pid=%d), waiting for readiness...", newPid)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-time.After(500 * time.Millisecond):
+		}
+		if !a.IsProcessRunning(newPid) {
+			a.SaveState("running")
+			return fmt.Errorf("[selfrestart] new process (pid=%d) exited unexpectedly", newPid)
+		}
+		running, state, _ := a.IsRunning()
+		if running && state == "running" {
+			logger.Info("[selfrestart] new process (pid=%d) is ready, exiting current", newPid)
+			os.Exit(0)
+		}
 	}
 
-	logger.Info("[selfrestart] new process started (pid=%d), exiting current", cmd.Process.Pid)
+	logger.Warn("[selfrestart] new process (pid=%d) did not become ready within timeout, exiting current anyway", newPid)
 	os.Exit(0)
 	return nil
 }
