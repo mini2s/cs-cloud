@@ -54,8 +54,8 @@ RUN set -eux; \
     if [ -z "$CS_BIN" ]; then \
       echo "cs binary not found in archive"; ls -R /opt/cs-extract; exit 1; \
     fi; \
-    cp "$CS_BIN" /usr/local/bin/cs; \
-    chmod +x /usr/local/bin/cs
+    cp "$CS_BIN" /opt/cs; \
+    chmod +x /opt/cs
 
 # -----------------------------------------------------------------------------
 # Stage 3: Final runtime image
@@ -69,13 +69,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates git && \
     rm -rf /var/lib/apt/lists/*
 
-# Install cs binary (from pre-downloaded release assets)
-COPY --from=cs-extractor /usr/local/bin/cs /usr/local/bin/cs
+# Install cs binary to /usr/local/bin
+COPY --from=cs-extractor /opt/cs /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs
 
-# Install cs-cloud binary
-COPY --from=cs-cloud-builder /build/cs-cloud /usr/local/bin/cs-cloud
-RUN chmod +x /usr/local/bin/cs-cloud
+# Install cs-cloud to /root/.costrict/bin/
+RUN mkdir -p /root/.costrict/bin
+COPY --from=cs-cloud-builder /build/cs-cloud /root/.costrict/bin/cs-cloud
+RUN chmod +x /root/.costrict/bin/cs-cloud
+
+ENV PATH="/root/.costrict/bin:${PATH}"
 
 # Volume for authentication credentials (auth.json, device.json)
 # Mount your local auth.json to /root/.costrict/share/auth.json
