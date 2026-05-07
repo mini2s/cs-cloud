@@ -45,6 +45,14 @@ func (a *App) StopDaemon() bool {
 		forceKill(pid)
 	}
 
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !a.IsProcessRunning(pid) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	a.RemovePID()
 	a.RemoveStopFile()
 	return true
@@ -55,4 +63,17 @@ func forceKill(pid int) {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	_ = cmd.Run()
+}
+
+func forceKillProcess(pid int) {
+	forceKill(pid)
+}
+
+func killOrphanProcesses() bool {
+	currentPid := os.Getpid()
+	cmd := exec.Command("taskkill", "/f", "/fi", fmt.Sprintf("PID ne %d", currentPid), "/im", "cs-cloud.exe")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	err := cmd.Run()
+	return err == nil
 }

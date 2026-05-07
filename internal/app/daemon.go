@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (a *App) pidFile() string {
@@ -114,10 +115,53 @@ func (a *App) DaemonStatus() (bool, int) {
 		return false, 0
 	}
 	if !a.IsProcessRunning(pid) {
-		a.RemovePID()
-		return false, 0
+		return false, pid
+	}
+	running, _, _ := a.IsRunning()
+	if !running {
+		return false, pid
 	}
 	return true, pid
+}
+
+func (a *App) ForceCleanupStale() bool {
+	cleaned := false
+	if pid, err := a.ReadPID(); err == nil && pid > 0 && a.IsProcessRunning(pid) {
+		a.forceKillStale(pid)
+		cleaned = true
+	}
+	if agentPID, err := a.ReadAgentPID(); err == nil && agentPID > 0 && a.IsProcessRunning(agentPID) {
+		a.forceKillStale(agentPID)
+		cleaned = true
+	}
+	if killOrphanProcesses() {
+		cleaned = true
+	}
+	a.cleanupAllStateFiles()
+	return cleaned
+}
+
+func (a *App) cleanupAllStateFiles() {
+	a.RemovePID()
+	a.RemoveAgentPID()
+	a.RemoveStopFile()
+	a.SaveState("stopped")
+	a.SaveServerURL("")
+}
+
+func (a *App) forceKillStale(pid int) {
+	if !a.IsProcessRunning(pid) {
+		return
+	}
+	forceKillProcess(pid)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !a.IsProcessRunning(pid) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	forceKillProcess(pid)
 }
 
 func (a *App) SaveMode(mode string) error {

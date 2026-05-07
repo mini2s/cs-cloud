@@ -12,6 +12,7 @@ require (
 	github.com/hashicorp/yamux v0.1.2
 	github.com/swaggo/swag v1.16.6
 	go.uber.org/zap v1.27.1
+	golang.org/x/sys v0.43.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	nhooyr.io/websocket v1.8.17
 )
@@ -51,7 +52,6 @@ require (
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
