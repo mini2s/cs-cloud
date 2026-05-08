@@ -128,7 +128,8 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 			for _, session := range payload.Sessions {
 				normalizeSession(session)
 			}
-			out, err := json.Marshal(payload)
+			// 前端期望直接返回数组，不是 {"sessions":[...]}
+			out, err := json.Marshal(payload.Sessions)
 			return out, err == nil, err
 		}
 		var single map[string]any
@@ -146,9 +147,18 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 						if status, ok := session["status"]; ok {
 							session["state"] = status
 						}
+						// 前端期望 type 字段: "idle" | "busy"
+						if _, exists := session["type"]; !exists {
+							if st, _ := session["status"].(string); st == "running" {
+								session["type"] = "busy"
+							} else {
+								session["type"] = "idle"
+							}
+						}
 					}
 				}
-				out, err := json.Marshal(payload)
+				// 前端期望扁平的 Record<string, SessionStatus>，不是 {"sessions":{...}}
+				out, err := json.Marshal(sessions)
 				return out, err == nil, err
 			}
 		}
@@ -226,6 +236,10 @@ func normalizeSession(session map[string]any) {
 		if _, exists := session["id"]; !exists {
 			session["id"] = id
 		}
+		// 前端需要 camelCase 的 sessionID 字段
+		if _, exists := session["sessionID"]; !exists {
+			session["sessionID"] = id
+		}
 	}
 	if status, ok := adapterString(session["status"]); ok {
 		if _, exists := session["state"]; !exists {
@@ -243,6 +257,44 @@ func normalizeSession(session map[string]any) {
 			session["updated_at"] = lastActive
 		} else if createdAt, ok := session["created_at"]; ok {
 			session["updated_at"] = createdAt
+		}
+	}
+
+	// 补齐前端 SDK Session 类型要求的字段
+	// slug: 用 id 代替
+	if _, exists := session["slug"]; !exists {
+		if id, ok := adapterString(session["id"]); ok {
+			session["slug"] = id
+		}
+	}
+	// projectID: 用 cwd 的 hash 或直接用 id
+	if _, exists := session["projectID"]; !exists {
+		if cwd, ok := adapterString(session["cwd"]); ok {
+			session["projectID"] = cwd
+		} else if id, ok := adapterString(session["id"]); ok {
+			session["projectID"] = id
+		}
+	}
+	// directory: 用 cwd
+	if _, exists := session["directory"]; !exists {
+		if cwd, ok := adapterString(session["cwd"]); ok {
+			session["directory"] = cwd
+		}
+	}
+	// version: 固定为 "1"
+	if _, exists := session["version"]; !exists {
+		session["version"] = "1"
+	}
+	// time: 前端期望 {created, updated} 结构
+	if _, exists := session["time"]; !exists {
+		created, _ := session["created_at"]
+		updated, _ := session["updated_at"]
+		if updated == nil {
+			updated = created
+		}
+		session["time"] = map[string]any{
+			"created": created,
+			"updated": updated,
 		}
 	}
 }
