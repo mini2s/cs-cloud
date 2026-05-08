@@ -177,7 +177,7 @@ func printUsage() {
 		{"status", "Show daemon status"},
 		{"logs", "Show daemon logs"},
 		{"logf", "Tail daemon logs (follow mode)"},
-		{"doctor", "Show diagnostic info"},
+		{"doctor", "Diagnose and auto-fix common issues"},
 		{"register", "Register device"},
 		{"login", "Login via browser OAuth"},
 		{"logout", "Delete credentials and device info"},

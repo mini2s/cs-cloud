@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/platform"
 )
 
@@ -41,9 +42,9 @@ type TokenResponse struct {
 }
 
 type pollResult struct {
-	Success bool         `json:"success"`
-	Data    *pollData    `json:"data"`
-	Message string       `json:"message"`
+	Success bool      `json:"success"`
+	Data    *pollData `json:"data"`
+	Message string    `json:"message"`
 }
 
 type pollData struct {
@@ -112,7 +113,8 @@ func PollLoginToken(ctx context.Context, baseURL, state, machineID string) (*Tok
 }
 
 func LoginCoStrict(ctx context.Context) (*Credentials, error) {
-	baseURL := GetCoStrictBaseURL("", "")
+	cc := cloud.NewClient(nil)
+	baseURL := cc.OIDCBaseURL("")
 	state := GenerateState()
 	machineID := GenerateMachineID()
 

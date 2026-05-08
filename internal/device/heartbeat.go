@@ -9,9 +9,10 @@ import (
 	"net/http"
 	"time"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/config"
 	"cs-cloud/internal/logger"
-	"cs-cloud/internal/platform"
+	"cs-cloud/internal/provider"
 	"cs-cloud/internal/version"
 )
 
@@ -49,14 +50,14 @@ func (c *Client) HeartbeatWithResponse(ctx context.Context) (*HeartbeatResponse,
 		"version":  version.Get(),
 	})
 
-	url := GetCloudAPIURL(c.cfg, "/api/devices/"+dev.DeviceID+"/heartbeat", dev.BaseURL)
+	url := c.cloud.URL(cloud.DeviceHeartbeatPath(dev.DeviceID), dev.BaseURL)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	setDeviceAuthHeaders(req, dev)
+	c.cloud.SetDeviceAuthHeadersWithUser(req, dev.DeviceToken, userAccessToken())
 
-	resp, err := platform.HTTPClient().Do(req)
+	resp, err := c.cloud.HTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -102,4 +103,11 @@ func HeartbeatLoop(ctx context.Context, cfg *config.Config, onCommands func([]Cl
 			}
 		}
 	}
+}
+
+func userAccessToken() string {
+	if cred, err := provider.LoadCredentials(); err == nil && cred != nil && cred.AccessToken != "" {
+		return cred.AccessToken
+	}
+	return ""
 }

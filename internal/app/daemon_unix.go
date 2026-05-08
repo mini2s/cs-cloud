@@ -72,6 +72,52 @@ func forceKillProcess(pid int) {
 	forceKillTree(pid)
 }
 
+type ConflictingInstance struct {
+	PID     int
+	CmdLine string
+}
+
+func (a *App) FindConflictingInstances() []ConflictingInstance {
+	knownPids := map[int]bool{os.Getpid(): true}
+	if pid, err := a.ReadPID(); err == nil && pid > 0 {
+		knownPids[pid] = true
+	}
+	if agentPID, err := a.ReadAgentPID(); err == nil && agentPID > 0 {
+		knownPids[agentPID] = true
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	var conflicts []ConflictingInstance
+	procs, _ := os.ReadDir("/proc")
+	for _, p := range procs {
+		if !p.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(p.Name())
+		if err != nil || knownPids[pid] {
+			continue
+		}
+		link, err := os.Readlink(filepath.Join("/proc", p.Name(), "exe"))
+		if err != nil || link != exe {
+			continue
+		}
+		cmdlineBytes, err := os.ReadFile(filepath.Join("/proc", p.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		args := strings.Split(string(cmdlineBytes), "\x00")
+		dd := dataDirFromArgs(args)
+		if rootDirFromDataDir(dd) != a.rootDir {
+			continue
+		}
+		conflicts = append(conflicts, ConflictingInstance{PID: pid, CmdLine: strings.Join(args, " ")})
+	}
+	return conflicts
+}
+
 func killOrphanProcesses(rootDir string) bool {
 	exe, err := os.Executable()
 	if err != nil {

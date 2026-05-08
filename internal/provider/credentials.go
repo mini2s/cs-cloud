@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/platform"
 )
 
@@ -68,12 +69,8 @@ func DeleteCredentials() error {
 }
 
 func GetCoStrictBaseURL(providerAPI string, credBaseURL string) string {
-	envURL := platform.Getenv("COSTRICT_BASE_URL")
-	defaultURL := "https://zgsm.sangfor.com"
-	raw := firstNonEmpty(envURL, providerAPI, credBaseURL, defaultURL)
-	raw = trimSuffix(raw, "/chat-rag/api/v1")
-	raw = trimSuffix(raw, "/")
-	return raw
+	cc := cloud.NewClient(nil)
+	return cc.OIDCBaseURL(credBaseURL)
 }
 
 func BuildOAuthParams(includeMachineCode bool, machineID string, state string) []string {
@@ -87,28 +84,12 @@ func BuildOAuthParams(includeMachineCode bool, machineID string, state string) [
 	if state != "" {
 		params = append(params, "state="+url.QueryEscape(state))
 	}
-	version := "costrict-cli-dev"
+	ver := "costrict-cli-dev"
 	params = append(params,
 		"provider=casdoor",
-		"plugin_version="+url.QueryEscape(version),
-		"vscode_version="+url.QueryEscape(version),
+		"plugin_version="+url.QueryEscape(ver),
+		"vscode_version="+url.QueryEscape(ver),
 		"uri_scheme=costrict-cli",
 	)
 	return params
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func trimSuffix(s, suffix string) string {
-	for len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
-		s = s[:len(s)-len(suffix)]
-	}
-	return s
 }

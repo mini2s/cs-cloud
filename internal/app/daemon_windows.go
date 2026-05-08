@@ -76,6 +76,63 @@ func forceKillProcess(pid int) {
 	forceKill(pid)
 }
 
+type ConflictingInstance struct {
+	PID     int
+	CmdLine string
+}
+
+func (a *App) FindConflictingInstances() []ConflictingInstance {
+	knownPids := map[int]bool{os.Getpid(): true}
+	if pid, err := a.ReadPID(); err == nil && pid > 0 {
+		knownPids[pid] = true
+	}
+	if agentPID, err := a.ReadAgentPID(); err == nil && agentPID > 0 {
+		knownPids[agentPID] = true
+	}
+
+	filters := make([]string, 0, len(knownPids))
+	for pid := range knownPids {
+		filters = append(filters, fmt.Sprintf("ProcessId<>%d", pid))
+	}
+	filter := "name='cs-cloud.exe'"
+	if len(filters) > 0 {
+		filter += " AND " + strings.Join(filters, " AND ")
+	}
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		fmt.Sprintf(
+			"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "+
+				"Get-CimInstance Win32_Process -Filter \"%s\" | "+
+				"ForEach-Object { $_.ProcessId.ToString() + '|' + $_.CommandLine }",
+			filter))
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var conflicts []ConflictingInstance
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		sep := strings.IndexByte(line, '|')
+		if sep < 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(line[:sep])
+		if err != nil {
+			continue
+		}
+		cmdline := line[sep+1:]
+		dd := extractDataDirFromCmdLine(cmdline)
+		if rootDirFromDataDir(dd) != a.rootDir {
+			continue
+		}
+		conflicts = append(conflicts, ConflictingInstance{PID: pid, CmdLine: cmdline})
+	}
+	return conflicts
+}
+
 func killOrphanProcesses(rootDir string) bool {
 	currentPid := os.Getpid()
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",

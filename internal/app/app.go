@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/config"
 	"cs-cloud/internal/device"
 	"cs-cloud/internal/platform"
@@ -22,7 +23,7 @@ func New() (*App, error) {
 	return &App{rootDir: platform.AppDir(), cfg: cfg}, nil
 }
 
-func (a *App) RootDir() string  { return a.rootDir }
+func (a *App) RootDir() string      { return a.rootDir }
 func (a *App) Config() *config.Config { return a.cfg }
 
 func (a *App) EnsureRootDir() error {
@@ -32,6 +33,11 @@ func (a *App) EnsureRootDir() error {
 func (a *App) CloudBaseURL() string {
 	client := device.NewClient(a.cfg)
 	return client.CloudBaseURL()
+}
+
+func (a *App) OIDCBaseURL(credBaseURL string) string {
+	cc := cloud.NewClient(a.cfg)
+	return cc.OIDCBaseURL(credBaseURL)
 }
 
 func (a *App) Credentials() (*provider.Credentials, error) {

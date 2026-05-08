@@ -29,7 +29,7 @@ func status(a *app.App) error {
 		return err
 	}
 
-	printTitle("cs-cloud status")
+	printTitle("status")
 
 	deviceIDVal := ""
 	if dev != nil {

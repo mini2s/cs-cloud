@@ -30,6 +30,17 @@ type commandStatusResponse struct {
 	Error       string    `json:"error,omitempty"`
 }
 
+// @Summary      Dispatch a command
+// @Description  Dispatches a remote command (upgrade, restart, reconnect) for asynchronous execution.
+// @Tags         Command
+// @Accept       json
+// @Produce      json
+// @Param        body  body  commandRequest  true  "Command request"
+// @Success      200  {object}  envelope{data=commandAck}
+// @Failure      400  {object}  envelope
+// @Failure      409  {object}  envelope
+// @Failure      503  {object}  envelope
+// @Router       /commands [post]
 func (s *Server) handleCommandDispatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
@@ -67,6 +78,16 @@ func (s *Server) handleCommandDispatch(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, ack)
 }
 
+// @Summary      Get command status
+// @Description  Returns the execution status of a dispatched command.
+// @Tags         Command
+// @Produce      json
+// @Param        command_id  query  string  true  "Command ID"
+// @Success      200  {object}  envelope{data=commandStatusResponse}
+// @Failure      400  {object}  envelope
+// @Failure      404  {object}  envelope
+// @Failure      503  {object}  envelope
+// @Router       /commands/status [get]
 func (s *Server) handleCommandStatus(w http.ResponseWriter, r *http.Request) {
 	commandID := r.URL.Query().Get("command_id")
 	if commandID == "" {

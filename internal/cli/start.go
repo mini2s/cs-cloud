@@ -25,6 +25,7 @@ func start(a *app.App) error {
 		printWarn("cs-cloud is already running")
 		printKV("pid", fmt.Sprintf("%d", pid))
 		printKV("url", url)
+		printInfo("Use 'restart' command if you want to restart the service")
 		return nil
 	}
 
@@ -162,7 +163,7 @@ waitDone:
 	}
 
 	url, _ := a.ServerURL()
-	printSuccess("cs-cloud started")
+	printSuccess("started")
 
 	printSection("Developer info")
 	printKV("pid", fmt.Sprintf("%d", cmd.Process.Pid))

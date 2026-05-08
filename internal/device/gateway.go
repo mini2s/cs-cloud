@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"cs-cloud/internal/platform"
-	"cs-cloud/internal/provider"
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/version"
 )
 
@@ -30,7 +29,8 @@ func CheckGatewayConnectivity(ctx context.Context, dev *DeviceInfo) error {
 		return nil
 	}
 
-	resp, err := platform.HTTPClient().Do(req)
+	cc := cloud.NewClient(nil)
+	resp, err := cc.HTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("gateway unreachable (%s): %w", gatewayURL, err)
 	}
@@ -43,14 +43,6 @@ func CheckGatewayConnectivity(ctx context.Context, dev *DeviceInfo) error {
 	return nil
 }
 
-func setDeviceAuthHeaders(req *http.Request, device *DeviceInfo) {
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+device.DeviceToken)
-	if cred, err := provider.LoadCredentials(); err == nil && cred != nil && cred.AccessToken != "" {
-		req.Header.Set("X-User-Token", cred.AccessToken)
-	}
-}
-
 func ValidateDeviceToken(ctx context.Context, device *DeviceInfo) error {
 	reqBody := map[string]any{
 		"deviceID": device.DeviceID,
@@ -61,14 +53,15 @@ func ValidateDeviceToken(ctx context.Context, device *DeviceInfo) error {
 		return err
 	}
 
-	url := GetCloudAPIURL(nil, "/cloud/device/gateway-assign", device.BaseURL)
+	cc := cloud.NewClient(nil)
+	url := cc.URL(cloud.PathGatewayAssign, device.BaseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	setDeviceAuthHeaders(req, device)
+	cc.SetDeviceAuthHeadersWithUser(req, device.DeviceToken, userAccessToken())
 
-	resp, err := platform.HTTPClient().Do(req)
+	resp, err := cc.HTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -95,14 +88,15 @@ func AssignGateway(ctx context.Context, device *DeviceInfo) (string, error) {
 		return "", err
 	}
 
-	url := GetCloudAPIURL(nil, "/cloud/device/gateway-assign", device.BaseURL)
+	cc := cloud.NewClient(nil)
+	url := cc.URL(cloud.PathGatewayAssign, device.BaseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
-	setDeviceAuthHeaders(req, device)
+	cc.SetDeviceAuthHeadersWithUser(req, device.DeviceToken, userAccessToken())
 
-	resp, err := platform.HTTPClient().Do(req)
+	resp, err := cc.HTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
