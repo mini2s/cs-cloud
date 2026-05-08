@@ -518,6 +518,13 @@ func adapterString(v any) (string, bool) {
 	return s, ok && s != ""
 }
 
+func extractProviderID(payload map[string]any) string {
+	if s, ok := adapterString(payload["provider_id"]); ok {
+		return s
+	}
+	return ""
+}
+
 // buildMessageParts 将 csc message 的 content 字段转换为前端 Part 数组格式
 func buildMessageParts(msg map[string]any) []map[string]any {
 	id, _ := adapterString(msg["id"])
@@ -795,7 +802,7 @@ func adaptMessageEvent(sessionID string, payload map[string]any) []sseFrame {
 		"parentID":   userMsgID,
 		"time":       map[string]any{"created": now},
 		"modelID":    "",
-		"providerID": "anthropic",
+		"providerID": extractProviderID(payload),
 		"mode":       "build",
 		"agent":      "build",
 		"path":       map[string]any{"cwd": sessionID, "root": sessionID},
@@ -998,7 +1005,7 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame 
 				"role":      "user",
 				"time":      map[string]any{"created": now},
 				"agent":     "build",
-				"model":     map[string]any{"providerID": "anthropic", "modelID": modelID},
+				"model":     map[string]any{"providerID": extractProviderID(payload), "modelID": modelID},
 			},
 		}),
 		frame("message.part.updated", map[string]any{
