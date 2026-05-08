@@ -7,6 +7,14 @@ import (
 	"cs-cloud/internal/logger"
 )
 
+// @Summary      List agent commands
+// @Description  Returns the command manifest including built-in and agent-provided slash commands.
+// @Tags         Agent
+// @Produce      json
+// @Param        include  query  string  false  "Comma-separated scopes to include"
+// @Success      200  {object}  envelope{data=map[string]any}
+// @Failure      500  {object}  envelope
+// @Router       /agents/commands [get]
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	scopes := agent.ParseIncludeScopes(r.URL.Query().Get("include"))
 

@@ -284,6 +284,14 @@ func gitShowFile(dir string, source string, path string) string {
 	return string(out)
 }
 
+// @Summary      Get conversation diff (deprecated)
+// @Description  Deprecated. Use GET /runtime/diff instead.
+// @Tags         Conversation
+// @Produce      json
+// @Param        id   path      string  true  "Conversation ID"
+// @Failure      501  {object}  envelope
+// @Deprecated   true
+// @Router       /conversations/{id}/diff [get]
 func (s *Server) handleConversationDiffDeprecated(w http.ResponseWriter, _ *http.Request) {
 	writeErr(w, http.StatusNotImplemented, "DEPRECATED", "conversation diff is deprecated, use GET /runtime/diff instead")
 }
