@@ -984,6 +984,11 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame 
 		}
 	}
 
+	var modelID string
+	if m, ok := payload["model"].(string); ok && m != "" {
+		modelID = m
+	}
+
 	return []sseFrame{
 		frame("message.updated", map[string]any{
 			"sessionID": sessionID,
@@ -993,7 +998,7 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame 
 				"role":      "user",
 				"time":      map[string]any{"created": now},
 				"agent":     "build",
-				"model":     map[string]any{"providerID": "anthropic", "modelID": ""},
+				"model":     map[string]any{"providerID": "anthropic", "modelID": modelID},
 			},
 		}),
 		frame("message.part.updated", map[string]any{

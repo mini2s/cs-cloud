@@ -282,17 +282,20 @@ func (a *Agent) spawnAndWaitForPort(ctx context.Context) (string, error) {
 	errCh := make(chan error, 1)
 
 	scanOutput := func(r io.Reader, tag string) {
-		var buf bytes.Buffer
 		scanner := bufio.NewScanner(r)
 		for scanner.Scan() {
 			line := scanner.Text()
 			logger.Info("[%s] %s: %s", tag, displayName, line)
-			buf.WriteString(line)
-			buf.WriteByte('\n')
 			for _, pat := range agent.PortPatterns {
 				matches := pat.FindStringSubmatch(line)
 				if len(matches) >= 2 {
-					endpointCh <- "http://127.0.0.1:" + matches[1]
+					select {
+					case endpointCh <- "http://127.0.0.1:" + matches[1]:
+					default:
+					}
+					if tag == "stderr" {
+						continue
+					}
 					return
 				}
 			}
