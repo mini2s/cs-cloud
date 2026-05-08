@@ -130,7 +130,8 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 			for _, session := range payload.Sessions {
 				normalizeSession(session)
 			}
-			out, err := json.Marshal(payload)
+			// 前端期望直接返回数组，不是 {"sessions":[...]}
+			out, err := json.Marshal(payload.Sessions)
 			return out, err == nil, err
 		}
 		var single map[string]any
@@ -148,9 +149,18 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 						if status, ok := session["status"]; ok {
 							session["state"] = status
 						}
+						// 前端期望 type 字段: "idle" | "busy"
+						if _, exists := session["type"]; !exists {
+							if st, _ := session["status"].(string); st == "running" {
+								session["type"] = "busy"
+							} else {
+								session["type"] = "idle"
+							}
+						}
 					}
 				}
-				out, err := json.Marshal(payload)
+				// 前端期望扁平的 Record<string, SessionStatus>，不是 {"sessions":{...}}
+				out, err := json.Marshal(sessions)
 				return out, err == nil, err
 			}
 		}
@@ -209,10 +219,17 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 			Messages []map[string]any `json:"messages"`
 		}
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
+			// 前端期望 [{info: Message, parts: Part[]}] 格式的数组
+			result := make([]map[string]any, 0, len(payload.Messages))
 			for _, msg := range payload.Messages {
 				normalizeMessage(msg)
+				parts := buildMessageParts(msg)
+				result = append(result, map[string]any{
+					"info":  msg,
+					"parts": parts,
+				})
 			}
-			out, err := json.Marshal(payload)
+			out, err := json.Marshal(result)
 			return out, err == nil, err
 		}
 	}
@@ -227,6 +244,10 @@ func normalizeSession(session map[string]any) {
 	if id, ok := adapterString(session["session_id"]); ok {
 		if _, exists := session["id"]; !exists {
 			session["id"] = id
+		}
+		// 前端需要 camelCase 的 sessionID 字段
+		if _, exists := session["sessionID"]; !exists {
+			session["sessionID"] = id
 		}
 		if _, exists := session["slug"]; !exists {
 			if len(id) >= 8 {
@@ -275,6 +296,82 @@ func normalizeSession(session map[string]any) {
 			if ok {
 				session["title"] = fmt.Sprintf("New session - %s", time.UnixMilli(int64(ts)).Format(time.RFC3339))
 			}
+		}
+	}
+
+	// 补齐前端 SDK Session 类型要求的字段
+	// slug: 用 id 代替
+	if _, exists := session["slug"]; !exists {
+		if id, ok := adapterString(session["id"]); ok {
+			session["slug"] = id
+		}
+	}
+	// projectID: 用 cwd 的 hash 或直接用 id
+	if _, exists := session["projectID"]; !exists {
+		if cwd, ok := adapterString(session["cwd"]); ok {
+			session["projectID"] = cwd
+		} else if id, ok := adapterString(session["id"]); ok {
+			session["projectID"] = id
+		}
+	}
+	// directory: 用 cwd
+	if _, exists := session["directory"]; !exists {
+		if cwd, ok := adapterString(session["cwd"]); ok {
+			session["directory"] = cwd
+		}
+	}
+	// version: 固定为 "1"
+	if _, exists := session["version"]; !exists {
+		session["version"] = "1"
+	}
+	// time: 前端期望 {created, updated} 结构
+	if _, exists := session["time"]; !exists {
+		created, _ := session["created_at"]
+		updated, _ := session["updated_at"]
+		if updated == nil {
+			updated = created
+		}
+		session["time"] = map[string]any{
+			"created": created,
+			"updated": updated,
+		}
+	}
+
+	// 补齐前端 SDK Session 类型要求的字段
+	// slug: 用 id 代替
+	if _, exists := session["slug"]; !exists {
+		if id, ok := adapterString(session["id"]); ok {
+			session["slug"] = id
+		}
+	}
+	// projectID: 用 cwd 的 hash 或直接用 id
+	if _, exists := session["projectID"]; !exists {
+		if cwd, ok := adapterString(session["cwd"]); ok {
+			session["projectID"] = cwd
+		} else if id, ok := adapterString(session["id"]); ok {
+			session["projectID"] = id
+		}
+	}
+	// directory: 用 cwd
+	if _, exists := session["directory"]; !exists {
+		if cwd, ok := adapterString(session["cwd"]); ok {
+			session["directory"] = cwd
+		}
+	}
+	// version: 固定为 "1"
+	if _, exists := session["version"]; !exists {
+		session["version"] = "1"
+	}
+	// time: 前端期望 {created, updated} 结构
+	if _, exists := session["time"]; !exists {
+		created, _ := session["created_at"]
+		updated, _ := session["updated_at"]
+		if updated == nil {
+			updated = created
+		}
+		session["time"] = map[string]any{
+			"created": created,
+			"updated": updated,
 		}
 	}
 }
@@ -373,16 +470,20 @@ func normalizeMessage(msg map[string]any) {
 	if msg == nil {
 		return
 	}
+	// id
 	if id, ok := adapterString(msg["uuid"]); ok {
 		msg["id"] = id
 		msg["msg_id"] = id
 	}
+	// parentID (camelCase)
 	if parent, ok := adapterString(msg["parent_uuid"]); ok {
 		msg["parent_id"] = parent
+		msg["parentID"] = parent
 	}
 	if sessionID, ok := adapterString(msg["session_id"]); ok {
 		msg["sessionID"] = sessionID
 	}
+	// timestamp -> created_at 和 time.created
 	if timestamp, ok := msg["timestamp"]; ok {
 		msg["created_at"] = timestamp
 		msg["time"] = map[string]any{"created": timestamp}
@@ -415,6 +516,90 @@ func adapterSetDefault(m map[string]any, key string, value any) {
 func adapterString(v any) (string, bool) {
 	s, ok := v.(string)
 	return s, ok && s != ""
+}
+
+// buildMessageParts 将 csc message 的 content 字段转换为前端 Part 数组格式
+func buildMessageParts(msg map[string]any) []map[string]any {
+	id, _ := adapterString(msg["id"])
+	sessionID, _ := adapterString(msg["sessionID"])
+	role, _ := adapterString(msg["role"])
+	parts := make([]map[string]any, 0)
+
+	content := msg["content"]
+	if content == nil {
+		return parts
+	}
+
+	makePart := func(partType string, extra map[string]any) map[string]any {
+		part := map[string]any{
+			"id":        id + "-" + partType,
+			"messageID": id,
+			"sessionID": sessionID,
+		}
+		for k, v := range extra {
+			part[k] = v
+		}
+		return part
+	}
+
+	switch role {
+	case "user":
+		switch v := content.(type) {
+		case string:
+			if v != "" {
+				parts = append(parts, makePart("text", map[string]any{
+					"type": "text",
+					"text": v,
+				}))
+			}
+		case []any:
+			for i, item := range v {
+				if block, ok := item.(map[string]any); ok {
+					blockType, _ := adapterString(block["type"])
+					if blockType == "text" {
+						parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
+							"type": "text",
+							"text": block["text"],
+						}))
+					}
+				}
+			}
+		}
+	case "assistant":
+		blocks, ok := content.([]any)
+		if !ok {
+			break
+		}
+		for i, item := range blocks {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			blockType, _ := adapterString(block["type"])
+			switch blockType {
+			case "text":
+				parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
+					"type": "text",
+					"text": block["text"],
+				}))
+			case "tool_use":
+				parts = append(parts, makePart(fmt.Sprintf("tool-%d", i), map[string]any{
+					"type":        "tool-invocation",
+					"toolName":    block["name"],
+					"toolCallID":  block["id"],
+					"state":       "result",
+					"input":       block["input"],
+				}))
+			case "thinking":
+				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
+					"type":     "reasoning",
+					"thinking": block["thinking"],
+				}))
+			}
+		}
+	}
+
+	return parts
 }
 
 func wrapEventStream(body io.ReadCloser) io.ReadCloser {
@@ -494,18 +679,18 @@ func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 	return pr
 }
 
-	var eventSeq uint64
+var eventSeq uint64
 
-	type sseFrame struct {
-		event string
-		data  string
+type sseFrame struct {
+	event string
+	data  string
+}
+
+func adaptEventPayload(eventName, joined string) []sseFrame {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(joined), &payload); err != nil {
+		return []sseFrame{{event: eventName, data: joined}}
 	}
-
-	func adaptEventPayload(eventName, joined string) []sseFrame {
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(joined), &payload); err != nil {
-			return []sseFrame{{event: eventName, data: joined}}
-		}
 
 	sessionID := extractSessionID(payload)
 
@@ -803,12 +988,12 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame 
 		frame("message.updated", map[string]any{
 			"sessionID": sessionID,
 			"info": map[string]any{
-				"id":         msgID,
-				"sessionID":  sessionID,
-				"role":       "user",
-				"time":       map[string]any{"created": now},
-				"agent":      "build",
-				"model":      map[string]any{"providerID": "anthropic", "modelID": ""},
+				"id":        msgID,
+				"sessionID": sessionID,
+				"role":      "user",
+				"time":      map[string]any{"created": now},
+				"agent":     "build",
+				"model":     map[string]any{"providerID": "anthropic", "modelID": ""},
 			},
 		}),
 		frame("message.part.updated", map[string]any{
