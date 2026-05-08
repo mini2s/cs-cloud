@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"cs-cloud/internal/platform"
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/version"
 )
 
@@ -22,14 +22,14 @@ func (c *Client) RotateToken(ctx context.Context) error {
 		return fmt.Errorf("device not registered")
 	}
 
-	url := GetCloudAPIURL(c.cfg, "/api/devices/"+dev.DeviceID+"/token/rotate", dev.BaseURL)
+	url := c.cloud.URL(cloud.DeviceTokenRotatePath(dev.DeviceID), dev.BaseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err
 	}
-	setDeviceAuthHeaders(req, dev)
+	c.cloud.SetDeviceAuthHeadersWithUser(req, dev.DeviceToken, userAccessToken())
 
-	resp, err := platform.HTTPClient().Do(req)
+	resp, err := c.cloud.HTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -72,14 +72,14 @@ func (c *Client) Heartbeat() error {
 		return err
 	}
 
-	url := GetCloudAPIURL(c.cfg, "/api/devices/"+dev.DeviceID+"/heartbeat", dev.BaseURL)
+	url := c.cloud.URL(cloud.DeviceHeartbeatPath(dev.DeviceID), dev.BaseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	setDeviceAuthHeaders(req, dev)
+	c.cloud.SetDeviceAuthHeadersWithUser(req, dev.DeviceToken, userAccessToken())
 
-	resp, err := platform.HTTPClient().Do(req)
+	resp, err := c.cloud.HTTPClient().Do(req)
 	if err != nil {
 		return err
 	}

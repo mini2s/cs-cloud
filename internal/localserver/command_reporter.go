@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/device"
 	"cs-cloud/internal/logger"
-	"cs-cloud/internal/platform"
 )
 
 type CommandReporter struct {
@@ -33,7 +33,8 @@ func (r *CommandReporter) Report(commandID string, result *commandStatusResponse
 		return
 	}
 
-	url := device.GetCloudAPIURL(nil, "/api/devices/"+dev.DeviceID+"/commands/"+commandID+"/result", dev.BaseURL)
+	cc := cloud.NewClient(nil)
+	url := cc.URL(cloud.DeviceCommandResultPath(dev.DeviceID, commandID), dev.BaseURL)
 
 	for attempt := 0; attempt < 3; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -42,10 +43,9 @@ func (r *CommandReporter) Report(commandID string, result *commandStatusResponse
 			cancel()
 			continue
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+dev.DeviceToken)
+		cc.SetDeviceAuthHeaders(req, dev.DeviceToken)
 
-		resp, doErr := platform.HTTPClient().Do(req)
+		resp, doErr := cc.HTTPClient().Do(req)
 		cancel()
 		if doErr != nil {
 			logger.Warn("[reporter] report attempt %d failed: %v", attempt+1, doErr)

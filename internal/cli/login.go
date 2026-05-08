@@ -20,7 +20,7 @@ func login(a *app.App) error {
 		return err
 	}
 
-	printTitle("cs-cloud login")
+	printTitle("login")
 	printSuccess("Login successful")
 	if claims, err := provider.ParseJWT(cred.AccessToken); err == nil {
 		user := claims.ResolveDisplayName()

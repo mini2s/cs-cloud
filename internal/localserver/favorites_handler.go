@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/logger"
-	"cs-cloud/internal/platform"
 	"cs-cloud/internal/provider"
 )
 
@@ -59,8 +59,10 @@ func ensureCloudCredentials(ctx context.Context) (*provider.Credentials, error) 
 	}
 
 	if creds.RefreshToken != "" && !provider.IsTokenValid(creds.AccessToken, creds.RefreshToken, creds.ExpiryDate) {
+		cc := cloud.NewClient(nil)
+		oidcBase := cc.OIDCBaseURL(creds.BaseURL)
 		refreshed, err := provider.RefreshCoStrictToken(
-			provider.GetCoStrictBaseURL("", creds.BaseURL),
+			oidcBase,
 			creds.RefreshToken,
 			creds.State,
 		)
@@ -75,7 +77,7 @@ func ensureCloudCredentials(ctx context.Context) (*provider.Credentials, error) 
 			RefreshToken: refreshed.RefreshToken,
 			State:        creds.State,
 			MachineID:    creds.MachineID,
-			BaseURL:      provider.GetCoStrictBaseURL("", creds.BaseURL),
+			BaseURL:      oidcBase,
 			ExpiryDate:   expiry,
 			UpdatedAt:    time.Now().Format(time.RFC3339),
 			ExpiredAt:    time.UnixMilli(expiry).Format(time.RFC3339),
@@ -95,10 +97,8 @@ func fetchCloudFavorites(ctx context.Context, itemType string) ([]favoriteItem, 
 		return nil, err
 	}
 
-	baseURL := provider.GetCoStrictBaseURL("", creds.BaseURL)
-	if !strings.HasSuffix(baseURL, "/cloud-api") {
-		baseURL = baseURL + "/cloud-api"
-	}
+	cc := cloud.NewClient(nil)
+	baseURL := cc.CloudBaseURL(creds.BaseURL)
 
 	var result []favoriteItem
 	for page := 1; page <= favoriteMaxPages; page++ {
@@ -118,7 +118,7 @@ func fetchCloudFavorites(ctx context.Context, itemType string) ([]favoriteItem, 
 		req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
 		req.Header.Set("Accept", "application/json")
 
-		resp, err := platform.HTTPClient().Do(req)
+		resp, err := cc.HTTPClient().Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("request failed: %w", err)
 		}

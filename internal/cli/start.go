@@ -163,7 +163,7 @@ waitDone:
 	}
 
 	url, _ := a.ServerURL()
-	printSuccess("cs-cloud started")
+	printSuccess("started")
 
 	printSection("Developer info")
 	printKV("pid", fmt.Sprintf("%d", cmd.Process.Pid))

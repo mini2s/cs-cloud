@@ -12,57 +12,27 @@ import (
 	"runtime"
 	"time"
 
+	"cs-cloud/internal/cloud"
 	"cs-cloud/internal/config"
-	"cs-cloud/internal/platform"
 	"cs-cloud/internal/provider"
 	"cs-cloud/internal/version"
 )
 
-const cloudAPIPrefix = "cloud-api"
-
 type Client struct {
-	cfg *config.Config
+	cfg   *config.Config
+	cloud *cloud.Client
 }
 
 func NewClient(cfg *config.Config) *Client {
-	return &Client{cfg: cfg}
-}
-
-func GetCloudBaseURL(cfg *config.Config, credBaseURL string) string {
-	if cfg == nil {
-		cfg = &config.Config{}
-	}
-	raw := trimRight(firstNonEmpty(
-		cfg.CloudBaseURL,
-		credBaseURL,
-		cfg.BaseURL,
-		platform.Getenv("COSTRICT_CLOUD_BASE_URL"),
-		platform.Getenv("COSTRICT_BASE_URL"),
-		"https://zgsm.sangfor.com",
-	), "/")
-	if hasSuffix(raw, "/"+cloudAPIPrefix) {
-		return raw
-	}
-	if cfg.CloudBaseURL != "" || platform.Getenv("COSTRICT_CLOUD_BASE_URL") != "" {
-		return raw
-	}
-	return raw + "/" + cloudAPIPrefix
-}
-
-func GetCloudAPIURL(cfg *config.Config, p string, baseURL string) string {
-	base := GetCloudBaseURL(cfg, baseURL)
-	if hasPrefix(p, "/") {
-		return base + p
-	}
-	return base + "/" + p
+	return &Client{cfg: cfg, cloud: cloud.NewClient(cfg)}
 }
 
 func (c *Client) CloudBaseURL() string {
 	cred, err := provider.LoadCredentials()
 	if err != nil || cred == nil {
-		return GetCloudBaseURL(c.cfg, "")
+		return c.cloud.CloudBaseURL("")
 	}
-	return GetCloudBaseURL(c.cfg, cred.BaseURL)
+	return c.cloud.CloudBaseURL(cred.BaseURL)
 }
 
 func (c *Client) Register(ctx context.Context) (*DeviceInfo, error) {
@@ -74,7 +44,7 @@ func (c *Client) Register(ctx context.Context) (*DeviceInfo, error) {
 		if ownerErr := ValidateDeviceOwner(existing); ownerErr != nil {
 			_ = ClearDevice()
 		} else {
-			resolved := GetCloudBaseURL(c.cfg, "")
+			resolved := c.cloud.CloudBaseURL("")
 			if resolved != existing.BaseURL {
 				existing.BaseURL = resolved
 				_ = SaveDevice(existing)
@@ -83,22 +53,22 @@ func (c *Client) Register(ctx context.Context) (*DeviceInfo, error) {
 		}
 	}
 
-	creds, err := auth(ctx)
+	creds, err := auth(ctx, c.cloud)
 	if err != nil {
 		return nil, err
 	}
 
-	base := GetCloudBaseURL(c.cfg, creds.BaseURL)
+	base := c.cloud.CloudBaseURL(creds.BaseURL)
 	deviceID := creds.MachineID
 
-	info, err := enroll(ctx, creds, base, deviceID)
+	info, err := enroll(ctx, c.cloud, creds, base, deviceID)
 	if err != nil {
 		if IsAuthError(err) && creds.RefreshToken != "" {
-			creds, err = renew(ctx, creds)
+			creds, err = renew(ctx, c.cloud, creds)
 			if err != nil {
 				return nil, err
 			}
-			info, err = enroll(ctx, creds, base, deviceID)
+			info, err = enroll(ctx, c.cloud, creds, base, deviceID)
 		}
 	}
 	if err != nil {
@@ -108,7 +78,7 @@ func (c *Client) Register(ctx context.Context) (*DeviceInfo, error) {
 	return info, nil
 }
 
-func auth(ctx context.Context) (*provider.Credentials, error) {
+func auth(ctx context.Context, cc *cloud.Client) (*provider.Credentials, error) {
 	creds, err := provider.LoadCredentials()
 	if err != nil {
 		return nil, err
@@ -119,14 +89,14 @@ func auth(ctx context.Context) (*provider.Credentials, error) {
 	if creds.RefreshToken == "" || provider.IsTokenValid(creds.AccessToken, creds.RefreshToken, creds.ExpiryDate) {
 		return creds, nil
 	}
-	return renew(ctx, creds)
+	return renew(ctx, cc, creds)
 }
 
-func renew(ctx context.Context, creds *provider.Credentials) (*provider.Credentials, error) {
+func renew(ctx context.Context, cc *cloud.Client, creds *provider.Credentials) (*provider.Credentials, error) {
 	if creds.RefreshToken == "" {
 		return creds, nil
 	}
-	baseURL := provider.GetCoStrictBaseURL("", creds.BaseURL)
+	baseURL := cc.OIDCBaseURL(creds.BaseURL)
 	result, err := provider.RefreshCoStrictToken(baseURL, creds.RefreshToken, creds.State)
 	if err != nil {
 		return nil, err
@@ -156,7 +126,7 @@ func renew(ctx context.Context, creds *provider.Credentials) (*provider.Credenti
 	return fresh, nil
 }
 
-func enroll(ctx context.Context, creds *provider.Credentials, base, deviceID string) (*DeviceInfo, error) {
+func enroll(ctx context.Context, cc *cloud.Client, creds *provider.Credentials, base, deviceID string) (*DeviceInfo, error) {
 	reqBody := registerRequest{
 		DeviceID:    deviceID,
 		DisplayName: hostname(),
@@ -168,15 +138,14 @@ func enroll(ctx context.Context, creds *provider.Credentials, base, deviceID str
 		return nil, err
 	}
 
-	url := GetCloudAPIURL(nil, "/api/devices/register", base)
+	url := cc.URL(cloud.PathDeviceRegister, base)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
+	cc.SetUserAuthHeaders(req, creds.AccessToken)
 
-	resp, err := platform.HTTPClient().Do(req)
+	resp, err := cc.HTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -275,30 +244,6 @@ func hostname() string {
 	return h
 }
 
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func trimRight(s, suffix string) string {
-	for len(s) > 0 && hasSuffix(s, suffix) {
-		s = s[:len(s)-len(suffix)]
-	}
-	return s
-}
-
-func hasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && containsStr(s, sub)
 }
@@ -334,15 +279,6 @@ type conflictResponse struct {
 	Error string `json:"error"`
 }
 
-// GetCloudBaseURL with nil-safe config
-func GetCloudBaseURLNilSafe(cfg *config.Config, credBaseURL string) string {
-	if cfg == nil {
-		cfg = &config.Config{}
-	}
-	return GetCloudBaseURL(cfg, credBaseURL)
-}
-
-// Ensure Errors implements error interface check
 var _ error = (*RegistrationError)(nil)
 
 type RegistrationError struct {
@@ -362,7 +298,6 @@ func GetRegistrationURL(err error) string {
 	return ""
 }
 
-// ClearDevice removes the local device.json file
 func ClearDevice() error {
 	p, err := DevicePath()
 	if err != nil {
