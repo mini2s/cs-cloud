@@ -518,6 +518,90 @@ func adapterString(v any) (string, bool) {
 	return s, ok && s != ""
 }
 
+// buildMessageParts 将 csc message 的 content 字段转换为前端 Part 数组格式
+func buildMessageParts(msg map[string]any) []map[string]any {
+	id, _ := adapterString(msg["id"])
+	sessionID, _ := adapterString(msg["sessionID"])
+	role, _ := adapterString(msg["role"])
+	parts := make([]map[string]any, 0)
+
+	content := msg["content"]
+	if content == nil {
+		return parts
+	}
+
+	makePart := func(partType string, extra map[string]any) map[string]any {
+		part := map[string]any{
+			"id":        id + "-" + partType,
+			"messageID": id,
+			"sessionID": sessionID,
+		}
+		for k, v := range extra {
+			part[k] = v
+		}
+		return part
+	}
+
+	switch role {
+	case "user":
+		switch v := content.(type) {
+		case string:
+			if v != "" {
+				parts = append(parts, makePart("text", map[string]any{
+					"type": "text",
+					"text": v,
+				}))
+			}
+		case []any:
+			for i, item := range v {
+				if block, ok := item.(map[string]any); ok {
+					blockType, _ := adapterString(block["type"])
+					if blockType == "text" {
+						parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
+							"type": "text",
+							"text": block["text"],
+						}))
+					}
+				}
+			}
+		}
+	case "assistant":
+		blocks, ok := content.([]any)
+		if !ok {
+			break
+		}
+		for i, item := range blocks {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			blockType, _ := adapterString(block["type"])
+			switch blockType {
+			case "text":
+				parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
+					"type": "text",
+					"text": block["text"],
+				}))
+			case "tool_use":
+				parts = append(parts, makePart(fmt.Sprintf("tool-%d", i), map[string]any{
+					"type":        "tool-invocation",
+					"toolName":    block["name"],
+					"toolCallID":  block["id"],
+					"state":       "result",
+					"input":       block["input"],
+				}))
+			case "thinking":
+				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
+					"type":     "reasoning",
+					"thinking": block["thinking"],
+				}))
+			}
+		}
+	}
+
+	return parts
+}
+
 func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go func() {
