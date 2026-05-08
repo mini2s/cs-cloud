@@ -217,10 +217,17 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 			Messages []map[string]any `json:"messages"`
 		}
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
+			// 前端期望 [{info: Message, parts: Part[]}] 格式的数组
+			result := make([]map[string]any, 0, len(payload.Messages))
 			for _, msg := range payload.Messages {
 				normalizeMessage(msg)
+				parts := buildMessageParts(msg)
+				result = append(result, map[string]any{
+					"info":  msg,
+					"parts": parts,
+				})
 			}
-			out, err := json.Marshal(payload)
+			out, err := json.Marshal(result)
 			return out, err == nil, err
 		}
 	}
@@ -372,16 +379,141 @@ func normalizeMessage(msg map[string]any) {
 	if msg == nil {
 		return
 	}
+	// id
 	if id, ok := adapterString(msg["uuid"]); ok {
 		msg["id"] = id
 		msg["msg_id"] = id
 	}
+	// parentID (camelCase)
 	if parent, ok := adapterString(msg["parent_uuid"]); ok {
 		msg["parent_id"] = parent
+		msg["parentID"] = parent
 	}
+	// timestamp -> created_at 和 time.created
 	if timestamp, ok := msg["timestamp"]; ok {
 		msg["created_at"] = timestamp
+		if _, exists := msg["time"]; !exists {
+			msg["time"] = map[string]any{"created": timestamp}
+		}
 	}
+	// sessionID
+	if _, exists := msg["sessionID"]; !exists {
+		if sid, ok := adapterString(msg["session_id"]); ok {
+			msg["sessionID"] = sid
+		}
+	}
+	// role 归一化
+	role, _ := adapterString(msg["role"])
+	if role == "" {
+		role, _ = adapterString(msg["type"])
+		msg["role"] = role
+	}
+	// assistant 消息补充必要字段
+	if role == "assistant" {
+		adapterSetDefault(msg, "parentID", "")
+		adapterSetDefault(msg, "modelID", "")
+		adapterSetDefault(msg, "providerID", "")
+		adapterSetDefault(msg, "mode", "")
+		adapterSetDefault(msg, "agent", "")
+		adapterSetDefault(msg, "path", map[string]any{"cwd": "", "root": ""})
+		adapterSetDefault(msg, "cost", 0)
+		adapterSetDefault(msg, "tokens", map[string]any{
+			"input": 0, "output": 0, "reasoning": 0,
+			"total": 0, "cache": map[string]any{"read": 0, "write": 0},
+		})
+	}
+	// user 消息补充必要字段
+	if role == "user" {
+		adapterSetDefault(msg, "agent", "")
+		adapterSetDefault(msg, "model", map[string]any{"providerID": "", "modelID": ""})
+	}
+}
+
+// buildMessageParts 将 csc message 的 content 字段转换为前端 Part 数组格式
+func buildMessageParts(msg map[string]any) []map[string]any {
+	id, _ := adapterString(msg["id"])
+	sessionID, _ := adapterString(msg["sessionID"])
+	role, _ := adapterString(msg["role"])
+	parts := make([]map[string]any, 0)
+
+	content := msg["content"]
+	if content == nil {
+		return parts
+	}
+
+	makePart := func(partType string, extra map[string]any) map[string]any {
+		part := map[string]any{
+			"id":        id + "-" + partType,
+			"messageID": id,
+			"sessionID": sessionID,
+		}
+		for k, v := range extra {
+			part[k] = v
+		}
+		return part
+	}
+
+	switch role {
+	case "user":
+		// user content 通常是字符串
+		switch v := content.(type) {
+		case string:
+			if v != "" {
+				parts = append(parts, makePart("text", map[string]any{
+					"type": "text",
+					"text": v,
+				}))
+			}
+		case []any:
+			for i, item := range v {
+				if block, ok := item.(map[string]any); ok {
+					blockType, _ := adapterString(block["type"])
+					switch blockType {
+					case "text":
+						parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
+							"type": "text",
+							"text": block["text"],
+						}))
+					}
+				}
+			}
+		}
+	case "assistant":
+		// assistant content 通常是 content blocks 数组
+		blocks, ok := content.([]any)
+		if !ok {
+			break
+		}
+		for i, item := range blocks {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			blockType, _ := adapterString(block["type"])
+			switch blockType {
+			case "text":
+				parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
+					"type": "text",
+					"text": block["text"],
+				}))
+			case "tool_use":
+				parts = append(parts, makePart(fmt.Sprintf("tool-%d", i), map[string]any{
+					"type":      "tool-invocation",
+					"toolName":  block["name"],
+					"toolCallID": block["id"],
+					"state":     "result",
+					"input":     block["input"],
+				}))
+			case "thinking":
+				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
+					"type":     "reasoning",
+					"thinking": block["thinking"],
+				}))
+			}
+		}
+	}
+
+	return parts
 }
 
 func adapterSetDefault(m map[string]any, key string, value any) {
