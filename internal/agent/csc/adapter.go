@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type AdapterServer struct {
@@ -226,11 +228,34 @@ func normalizeSession(session map[string]any) {
 		if _, exists := session["id"]; !exists {
 			session["id"] = id
 		}
+		if _, exists := session["slug"]; !exists {
+			if len(id) >= 8 {
+				session["slug"] = id[:8]
+			} else {
+				session["slug"] = id
+			}
+		}
+	}
+	if cwd, ok := adapterString(session["cwd"]); ok {
+		if _, exists := session["directory"]; !exists {
+			session["directory"] = cwd
+		}
 	}
 	if status, ok := adapterString(session["status"]); ok {
 		if _, exists := session["state"]; !exists {
 			session["state"] = status
 		}
+	}
+	if _, exists := session["time"]; !exists {
+		timeObj := map[string]any{}
+		if v, ok := session["created_at"]; ok {
+			timeObj["created"] = v
+			timeObj["updated"] = v
+		}
+		if v, ok := session["last_active_at"]; ok {
+			timeObj["updated"] = v
+		}
+		session["time"] = timeObj
 	}
 	if _, exists := session["backend"]; !exists {
 		session["backend"] = "csc"
@@ -238,11 +263,18 @@ func normalizeSession(session map[string]any) {
 	if _, exists := session["driver"]; !exists {
 		session["driver"] = "http"
 	}
-	if _, exists := session["updated_at"]; !exists {
-		if lastActive, ok := session["last_active_at"]; ok {
-			session["updated_at"] = lastActive
-		} else if createdAt, ok := session["created_at"]; ok {
-			session["updated_at"] = createdAt
+	if _, exists := session["projectID"]; !exists {
+		session["projectID"] = "prj_default"
+	}
+	if _, exists := session["version"]; !exists {
+		session["version"] = "1.0.0"
+	}
+	if _, exists := session["title"]; !exists {
+		if createdAt, ok := session["created_at"]; ok {
+			ts, ok := createdAt.(float64)
+			if ok {
+				session["title"] = fmt.Sprintf("New session - %s", time.UnixMilli(int64(ts)).Format(time.RFC3339))
+			}
 		}
 	}
 }
@@ -269,8 +301,15 @@ func normalizePermission(perm map[string]any) {
 		}
 	}
 	if sessionID, ok := adapterString(perm["sessionId"]); ok {
+		perm["sessionID"] = sessionID
 		perm["conversation_id"] = sessionID
 	}
+	if toolName, ok := adapterString(perm["toolName"]); ok {
+		perm["permission"] = toolName
+	}
+	adapterSetDefault(perm, "patterns", []string{})
+	adapterSetDefault(perm, "metadata", map[string]any{})
+	adapterSetDefault(perm, "always", []string{})
 }
 
 func normalizeQuestion(q map[string]any) {
@@ -281,11 +320,25 @@ func normalizeQuestion(q map[string]any) {
 		q["id"] = id
 	}
 	if sessionID, ok := adapterString(q["sessionId"]); ok {
+		q["sessionID"] = sessionID
 		q["conversation_id"] = sessionID
 	}
-	if message, ok := adapterString(q["message"]); ok {
-		q["title"] = message
+	message, _ := adapterString(q["message"])
+	serverName, _ := adapterString(q["mcpServerName"])
+	mode, _ := adapterString(q["mode"])
+	if _, exists := q["questions"]; !exists && message != "" {
+		q["questions"] = []map[string]any{
+			{
+				"question": message,
+				"header":   serverName,
+				"options":  []map[string]any{},
+				"multiple": mode == "form",
+				"custom":   true,
+			},
+		}
 	}
+	adapterSetDefault(q, "title", message)
+	adapterSetDefault(q, "tool", nil)
 }
 
 func normalizeModelCapabilities(payload map[string]any) {
@@ -327,9 +380,30 @@ func normalizeMessage(msg map[string]any) {
 	if parent, ok := adapterString(msg["parent_uuid"]); ok {
 		msg["parent_id"] = parent
 	}
+	if sessionID, ok := adapterString(msg["session_id"]); ok {
+		msg["sessionID"] = sessionID
+	}
 	if timestamp, ok := msg["timestamp"]; ok {
 		msg["created_at"] = timestamp
+		msg["time"] = map[string]any{"created": timestamp}
 	}
+	if role, ok := adapterString(msg["role"]); ok {
+		msg["role"] = role
+	}
+	if _, ok := msg["role"]; !ok {
+		if _, isAssistant := msg["message"]; isAssistant {
+			msg["role"] = "assistant"
+		} else {
+			msg["role"] = "user"
+		}
+	}
+	adapterSetDefault(msg, "cost", 0)
+	adapterSetDefault(msg, "tokens", map[string]any{
+		"input":     0,
+		"output":    0,
+		"reasoning": 0,
+		"cache":     map[string]any{"read": 0, "write": 0},
+	})
 }
 
 func adapterSetDefault(m map[string]any, key string, value any) {
@@ -360,26 +434,28 @@ func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 				return nil
 			}
 			joined := strings.Join(dataLines, "\n")
-			adapted := joined
+			var frames []sseFrame
 			if strings.TrimSpace(joined) != "" {
-				adapted = adaptEventPayload(eventName, joined)
+				frames = adaptEventPayload(eventName, joined)
 			}
-			if eventName != "" {
-				if _, err := io.WriteString(pw, "event: "+eventName+"\n"); err != nil {
-					return err
-				}
+			if len(frames) == 0 {
+				eventName = ""
+				dataLines = nil
+				return nil
 			}
-			if adapted != "" {
-				for _, line := range strings.Split(adapted, "\n") {
-					if _, err := io.WriteString(pw, "data: "+line+"\n"); err != nil {
+			for _, f := range frames {
+				if f.data != "" {
+					if _, err := io.WriteString(pw, "data: "+f.data+"\n"); err != nil {
 						return err
 					}
 				}
+				if _, err := io.WriteString(pw, "\n"); err != nil {
+					return err
+				}
 			}
-			_, err := io.WriteString(pw, "\n")
 			eventName = ""
 			dataLines = nil
-			return err
+			return nil
 		}
 
 		for scanner.Scan() {
@@ -418,43 +494,405 @@ func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 	return pr
 }
 
-func adaptEventPayload(eventName, joined string) string {
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(joined), &payload); err != nil {
-		return joined
+	var eventSeq uint64
+
+	type sseFrame struct {
+		event string
+		data  string
 	}
-	typeName, _ := payload["type"].(string)
-	if typeName == "" {
-		typeName = eventName
+
+	func adaptEventPayload(eventName, joined string) []sseFrame {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(joined), &payload); err != nil {
+			return []sseFrame{{event: eventName, data: joined}}
+		}
+
+	sessionID := extractSessionID(payload)
+
+	switch eventName {
+	case "session.created":
+		normalizeSession(payload)
+		return []sseFrame{frame("session.created", map[string]any{
+			"sessionID": sessionID,
+			"info":      payload,
+		})}
+
+	case "session.ready":
+		normalizeSession(payload)
+		return []sseFrame{frame("session.updated", map[string]any{
+			"sessionID": sessionID,
+			"info":      payload,
+		})}
+
+	case "session.deleted":
+		normalizeSession(payload)
+		return []sseFrame{frame("session.deleted", map[string]any{
+			"sessionID": sessionID,
+			"info":      payload,
+		})}
+
+	case "session.message":
+		return adaptMessageEvent(sessionID, payload)
+
+	case "session.result":
+		return []sseFrame{
+			frame("session.status", map[string]any{
+				"sessionID": sessionID,
+				"status":    map[string]any{"type": "idle"},
+			}),
+			frame("session.idle", map[string]any{
+				"sessionID": sessionID,
+			}),
+			frame("session.diff", map[string]any{
+				"sessionID": sessionID,
+				"diff":      []any{},
+			}),
+		}
+
+	case "session.control_request":
+		return adaptControlRequestEvent(sessionID, payload)
+
+	default:
+		typeName, _ := payload["type"].(string)
+		if typeName == "" {
+			typeName = eventName
+		}
+		if typeName == "server.heartbeat" {
+			return []sseFrame{frame("server.heartbeat", map[string]any{})}
+		}
+		props := map[string]any{}
+		for k, v := range payload {
+			props[k] = v
+		}
+		if sessionID != "" {
+			props["sessionID"] = sessionID
+		}
+		return []sseFrame{frame(typeName, props)}
 	}
-	conversationID := ""
-	for _, key := range []string{"conversation_id", "session_id", "sessionId"} {
+}
+
+func extractSessionID(payload map[string]any) string {
+	for _, key := range []string{"session_id", "sessionId", "sessionID"} {
 		if v, ok := adapterString(payload[key]); ok {
-			conversationID = v
-			break
+			return v
 		}
 	}
-	msgID := ""
-	for _, key := range []string{"msg_id", "message_id", "uuid", "id"} {
-		if v, ok := adapterString(payload[key]); ok {
-			msgID = v
-			break
+	return ""
+}
+
+func adaptMessageEvent(sessionID string, payload map[string]any) []sseFrame {
+	msgType, _ := payload["type"].(string)
+
+	if msgType == "user" {
+		return adaptUserMessageEvent(sessionID, payload)
+	}
+
+	if msgType != "assistant" {
+		return nil
+	}
+
+	seq := atomic.AddUint64(&eventSeq, 1)
+	now := time.Now().UnixMilli()
+	msgID := fmt.Sprintf("msg_%d", seq)
+
+	var userMsgID string
+	if umid, ok := adapterString(payload["parent_tool_use_id"]); ok && umid != "" {
+		userMsgID = umid
+	}
+	if userMsgID == "" {
+		userMsgID = fmt.Sprintf("msg_%d", seq-1)
+	}
+
+	info := map[string]any{
+		"id":         msgID,
+		"sessionID":  sessionID,
+		"role":       "assistant",
+		"parentID":   userMsgID,
+		"time":       map[string]any{"created": now},
+		"modelID":    "",
+		"providerID": "anthropic",
+		"mode":       "build",
+		"agent":      "build",
+		"path":       map[string]any{"cwd": sessionID, "root": sessionID},
+		"cost":       0,
+		"tokens": map[string]any{
+			"input": 0, "output": 0, "reasoning": 0,
+			"cache": map[string]any{"read": 0, "write": 0},
+		},
+	}
+
+	var parts []sseFrame
+
+	if msg, ok := payload["message"].(map[string]any); ok {
+		if cost, ok := payload["cost_usd"]; ok {
+			info["cost"] = cost
+		}
+		if usage, ok := payload["usage"].(map[string]any); ok {
+			inTokens := usage["input_tokens"]
+			outTokens := usage["output_tokens"]
+			totalTokens := 0
+			if in, ok := inTokens.(float64); ok {
+				totalTokens += int(in)
+			}
+			if out, ok := outTokens.(float64); ok {
+				totalTokens += int(out)
+			}
+			info["tokens"] = map[string]any{
+				"total":     totalTokens,
+				"input":     inTokens,
+				"output":    outTokens,
+				"reasoning": 0,
+				"cache":     map[string]any{"read": 0, "write": 0},
+			}
+		}
+		if model, ok := payload["model"].(string); ok {
+			info["modelID"] = model
+		}
+
+		if content, ok := msg["content"].([]any); ok {
+			partSeq := atomic.AddUint64(&eventSeq, 1)
+
+			parts = append(parts, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        fmt.Sprintf("prt_%d_start", partSeq),
+					"sessionID": sessionID,
+					"messageID": msgID,
+					"type":      "step-start",
+				},
+				"time": now,
+			}))
+
+			for i, block := range content {
+				blockMap, ok := block.(map[string]any)
+				if !ok {
+					continue
+				}
+				blockType, _ := blockMap["type"].(string)
+				partID := fmt.Sprintf("prt_%d_%d", partSeq, i)
+
+				switch blockType {
+				case "text":
+					text, _ := blockMap["text"].(string)
+					parts = append(parts, frame("message.part.updated", map[string]any{
+						"sessionID": sessionID,
+						"part": map[string]any{
+							"id":        partID,
+							"sessionID": sessionID,
+							"messageID": msgID,
+							"type":      "text",
+							"text":      text,
+							"time":      map[string]any{"start": now, "end": now},
+						},
+						"time": now,
+					}))
+				case "tool_use":
+					toolName, _ := blockMap["name"].(string)
+					toolID, _ := blockMap["id"].(string)
+					input := blockMap["input"]
+					if input == nil {
+						input = map[string]any{}
+					}
+					parts = append(parts, frame("message.part.updated", map[string]any{
+						"sessionID": sessionID,
+						"part": map[string]any{
+							"id":        partID,
+							"sessionID": sessionID,
+							"messageID": msgID,
+							"type":      "tool",
+							"callID":    toolID,
+							"tool":      toolName,
+							"state": map[string]any{
+								"status": "completed",
+								"input":  input,
+								"title":  toolName,
+							},
+						},
+						"time": now,
+					}))
+				case "thinking":
+					thinking, _ := blockMap["thinking"].(string)
+					parts = append(parts, frame("message.part.updated", map[string]any{
+						"sessionID": sessionID,
+						"part": map[string]any{
+							"id":        partID,
+							"sessionID": sessionID,
+							"messageID": msgID,
+							"type":      "reasoning",
+							"text":      thinking,
+							"time":      map[string]any{"start": now},
+						},
+						"time": now,
+					}))
+				}
+			}
+
+			parts = append(parts, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        fmt.Sprintf("prt_%d_finish", partSeq),
+					"sessionID": sessionID,
+					"messageID": msgID,
+					"type":      "step-finish",
+					"reason":    "stop",
+					"cost":      info["cost"],
+					"tokens":    info["tokens"],
+				},
+				"time": now,
+			}))
+		}
+	} else if msgType == "tool_progress" {
+		partSeq := atomic.AddUint64(&eventSeq, 1)
+		partID := fmt.Sprintf("prt_%d_tool", partSeq)
+		parts = append(parts, frame("message.part.updated", map[string]any{
+			"sessionID": sessionID,
+			"part": map[string]any{
+				"id":        partID,
+				"sessionID": sessionID,
+				"messageID": msgID,
+				"type":      "tool",
+			},
+			"time": now,
+		}))
+	}
+
+	result := []sseFrame{
+		frame("session.status", map[string]any{
+			"sessionID": sessionID,
+			"status":    map[string]any{"type": "busy"},
+		}),
+		frame("message.updated", map[string]any{
+			"sessionID": sessionID,
+			"info":      info,
+		}),
+	}
+	result = append(result, parts...)
+
+	infoCompleted := map[string]any{}
+	for k, v := range info {
+		infoCompleted[k] = v
+	}
+	infoCompleted["time"] = map[string]any{"created": now, "completed": now + 1}
+	if _, ok := info["tokens"]; ok {
+		infoCompleted["finish"] = "stop"
+	}
+
+	result = append(result, frame("message.updated", map[string]any{
+		"sessionID": sessionID,
+		"info":      infoCompleted,
+	}))
+
+	return result
+}
+
+func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame {
+	seq := atomic.AddUint64(&eventSeq, 1)
+	now := time.Now().UnixMilli()
+	msgID := fmt.Sprintf("msg_%d", seq)
+
+	text := ""
+	if content, ok := payload["content"].(string); ok {
+		text = content
+	} else if msg, ok := payload["message"].(map[string]any); ok {
+		if c, ok := msg["content"].(string); ok {
+			text = c
 		}
 	}
-	envelope := map[string]any{
-		"type":    typeName,
-		"backend": "csc",
-		"data":    payload,
+
+	return []sseFrame{
+		frame("message.updated", map[string]any{
+			"sessionID": sessionID,
+			"info": map[string]any{
+				"id":         msgID,
+				"sessionID":  sessionID,
+				"role":       "user",
+				"time":       map[string]any{"created": now},
+				"agent":      "build",
+				"model":      map[string]any{"providerID": "anthropic", "modelID": ""},
+			},
+		}),
+		frame("message.part.updated", map[string]any{
+			"sessionID": sessionID,
+			"part": map[string]any{
+				"id":        fmt.Sprintf("prt_%d_0", seq),
+				"type":      "text",
+				"text":      text,
+				"messageID": msgID,
+				"sessionID": sessionID,
+			},
+			"time": now,
+		}),
 	}
-	if conversationID != "" {
-		envelope["conversation_id"] = conversationID
+}
+
+func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFrame {
+	request, _ := payload["request"].(map[string]any)
+	requestID, _ := adapterString(payload["request_id"])
+	if request == nil {
+		request = map[string]any{}
 	}
-	if msgID != "" {
-		envelope["msg_id"] = msgID
+	subtype, _ := request["subtype"].(string)
+
+	switch subtype {
+	case "can_use_tool":
+		toolName, _ := request["tool_name"].(string)
+		toolUseID, _ := request["tool_use_id"].(string)
+		input := request["input"]
+		if input == nil {
+			input = map[string]any{}
+		}
+		return []sseFrame{frame("permission.asked", map[string]any{
+			"id":         requestID,
+			"sessionID":  sessionID,
+			"permission": toolName,
+			"patterns":   []string{},
+			"metadata":   map[string]any{"input": input},
+			"always":     []string{},
+			"tool": map[string]any{
+				"messageID": "",
+				"callID":    toolUseID,
+			},
+		})}
+
+	case "elicitation":
+		message, _ := request["message"].(string)
+		serverName, _ := request["mcp_server_name"].(string)
+		schema := request["requested_schema"]
+		if schema == nil {
+			schema = map[string]any{}
+		}
+		return []sseFrame{frame("question.asked", map[string]any{
+			"id":        requestID,
+			"sessionID": sessionID,
+			"questions": []map[string]any{
+				{
+					"question": message,
+					"header":   serverName,
+					"options":  []map[string]any{},
+					"multiple": false,
+					"custom":   true,
+				},
+			},
+			"tool": nil,
+		})}
+
+	default:
+		return []sseFrame{frame("session.control_request", map[string]any{
+			"sessionID": sessionID,
+			"requestID": requestID,
+			"request":   request,
+		})}
 	}
+}
+
+func frame(typeName string, properties map[string]any) sseFrame {
+	envelope := struct {
+		Type       string         `json:"type"`
+		Properties map[string]any `json:"properties"`
+	}{Type: typeName, Properties: properties}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		return joined
+		return sseFrame{data: `{"type":"","properties":null}`}
 	}
-	return string(encoded)
+	return sseFrame{data: string(encoded)}
 }
