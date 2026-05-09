@@ -591,6 +591,7 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 						} else {
 							state["status"] = "completed"
 							state["output"] = output
+							state["metadata"] = map[string]any{"output": output}
 						}
 					}
 				}
@@ -615,11 +616,25 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 				}))
 			case "tool_use":
 				toolID, _ := block["id"].(string)
-				toolName, _ := block["name"].(string)
+				toolName := normalizeToolName(block["name"].(string))
+				inputMap, _ := block["input"].(map[string]any)
+				inputMap = normalizeToolInput(inputMap)
+				title := toolName
+				if desc, ok := inputMap["description"].(string); ok && desc != "" {
+					title = desc
+				}
+				metadata := map[string]any{}
+				toolLower := strings.ToLower(toolName)
+				if toolLower == "edit" || toolLower == "fileedittool" {
+					if filediff := buildFileDiff(inputMap); filediff != nil {
+						metadata["filediff"] = filediff
+					}
+				}
 				state := map[string]any{
-					"status": "completed",
-					"input":  block["input"],
-					"title":  toolName,
+					"status":   "completed",
+					"input":    inputMap,
+					"title":    title,
+					"metadata": metadata,
 				}
 				part := makePart(fmt.Sprintf("tool-%d", i), map[string]any{
 					"type":   "tool",
@@ -654,6 +669,7 @@ type toolPartMeta struct {
 	partID   string
 	msgID    string
 	toolName string
+	input    map[string]any
 }
 
 type streamingState struct {
@@ -798,10 +814,89 @@ func adaptEventPayload(eventName, joined string, ss *streamingState) []sseFrame 
 		return adaptMessageEvent(sessionID, payload, ss)
 
 	case "session.result":
+		isInterrupted, _ := payload["is_interrupted"].(bool)
+		var frames []sseFrame
+
+		if isInterrupted {
+			now := time.Now().UnixMilli()
+			needStepFinish := ss.active
+
+			for toolID, meta := range ss.toolUseParts {
+				frames = append(frames, frame("message.part.updated", map[string]any{
+					"sessionID": sessionID,
+					"part": map[string]any{
+						"id":        meta.partID,
+						"sessionID": sessionID,
+						"messageID": meta.msgID,
+						"type":      "tool",
+						"callID":    toolID,
+						"tool":      meta.toolName,
+						"state": map[string]any{
+							"status": "error",
+							"error":  "Tool execution aborted",
+							"input":  meta.input,
+							"title":  meta.toolName,
+							"time":   map[string]any{"start": now, "end": now},
+						},
+					},
+					"time": now,
+				}))
+			}
+
+			if ss.msgID != "" {
+				if needStepFinish {
+					frames = append(frames, frame("message.part.updated", map[string]any{
+						"sessionID": sessionID,
+						"part": map[string]any{
+							"id":        fmt.Sprintf("prt_%d_finish", ss.partSeq),
+							"sessionID": sessionID,
+							"messageID": ss.msgID,
+							"type":      "step-finish",
+							"reason":    "stop",
+						},
+						"time": now,
+					}))
+				}
+				frames = append(frames, frame("message.updated", map[string]any{
+					"sessionID": sessionID,
+					"info": map[string]any{
+						"id":         ss.msgID,
+						"sessionID":  sessionID,
+						"role":       "assistant",
+						"parentID":   ss.parentMsgID,
+						"time":       map[string]any{"created": now, "completed": now},
+						"modelID":    ss.modelID,
+						"providerID": ss.providerID,
+						"mode":       "build",
+						"agent":      "build",
+						"path":       map[string]any{"cwd": sessionID, "root": sessionID},
+						"cost":       0,
+						"tokens": map[string]any{
+							"input": 0, "output": 0, "reasoning": 0,
+							"cache": map[string]any{"read": 0, "write": 0},
+						},
+						"error": map[string]any{
+							"name": "MessageAbortedError",
+							"data": map[string]any{"message": "Aborted"},
+						},
+					},
+				}))
+				frames = append(frames, frame("session.error", map[string]any{
+					"sessionID": sessionID,
+					"error": map[string]any{
+						"name": "MessageAbortedError",
+						"data": map[string]any{"message": "Aborted"},
+					},
+				}))
+			}
+		}
+
 		ss.active = false
 		ss.blocks = make(map[int]*blockState)
+		ss.toolUseParts = make(map[string]*toolPartMeta)
 		ss.turnParentID = ""
-		return []sseFrame{
+
+		frames = append(frames,
 			frame("session.status", map[string]any{
 				"sessionID": sessionID,
 				"status":    map[string]any{"type": "idle"},
@@ -813,7 +908,8 @@ func adaptEventPayload(eventName, joined string, ss *streamingState) []sseFrame 
 				"sessionID": sessionID,
 				"diff":      []any{},
 			}),
-		}
+		)
+		return frames
 
 	case "session.control_request":
 		return adaptControlRequestEvent(sessionID, payload)
@@ -926,7 +1022,7 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 					if blockType != "tool_use" {
 						continue
 					}
-					toolName, _ := blockMap["name"].(string)
+					toolName := normalizeToolName(blockMap["name"].(string))
 					toolID, _ := blockMap["id"].(string)
 					if toolID == "" {
 						continue
@@ -935,11 +1031,10 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 						continue
 					}
 					input := blockMap["input"]
-					if input == nil {
-						input = map[string]any{}
-					}
+					inputMap, _ := input.(map[string]any)
+					inputMap = normalizeToolInput(inputMap)
 					partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, i)
-					ss.toolUseParts[toolID] = &toolPartMeta{partID: partID, msgID: ss.msgID, toolName: toolName}
+					ss.toolUseParts[toolID] = &toolPartMeta{partID: partID, msgID: ss.msgID, toolName: toolName, input: inputMap}
 					result = append(result, frame("message.part.updated", map[string]any{
 						"sessionID": sessionID,
 						"part": map[string]any{
@@ -1084,13 +1179,12 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 						"time": now,
 					}))
 				case "tool_use":
-					toolName, _ := blockMap["name"].(string)
+					toolName := normalizeToolName(blockMap["name"].(string))
 					toolID, _ := blockMap["id"].(string)
 					input := blockMap["input"]
-					if input == nil {
-						input = map[string]any{}
-					}
-					ss.toolUseParts[toolID] = &toolPartMeta{partID: partID, msgID: msgID, toolName: toolName}
+					inputMap, _ := input.(map[string]any)
+					inputMap = normalizeToolInput(inputMap)
+					ss.toolUseParts[toolID] = &toolPartMeta{partID: partID, msgID: msgID, toolName: toolName, input: inputMap}
 					parts = append(parts, frame("message.part.updated", map[string]any{
 						"sessionID": sessionID,
 						"part": map[string]any{
@@ -1102,7 +1196,7 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 							"tool":      toolName,
 							"state": map[string]any{
 								"status": "running",
-								"input":  input,
+								"input":  inputMap,
 								"title":  toolName,
 							},
 						},
@@ -1184,11 +1278,36 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 }
 
 func adaptUserMessageEvent(sessionID string, payload map[string]any, ss *streamingState) []sseFrame {
+	msg, _ := payload["message"].(map[string]any)
+	if msg != nil {
+		if content, ok := msg["content"].(string); ok {
+			if content == "[Request interrupted by user]" || content == "[Request interrupted by user for tool use]" {
+				return nil
+			}
+		}
+		if blocks, ok := msg["content"].([]any); ok {
+			for _, block := range blocks {
+				blockMap, ok := block.(map[string]any)
+				if !ok {
+					continue
+				}
+				if blockMap["type"] == "text" {
+					text, _ := blockMap["text"].(string)
+					if text == "[Request interrupted by user]" || text == "[Request interrupted by user for tool use]" {
+						return nil
+					}
+				}
+			}
+		}
+	}
+
 	seq := atomic.AddUint64(&eventSeq, 1)
 	now := time.Now().UnixMilli()
 	msgID := fmt.Sprintf("msg_%d", seq)
 
-	msg, _ := payload["message"].(map[string]any)
+	if msg == nil {
+		msg, _ = payload["message"].(map[string]any)
+	}
 	var contentBlocks []any
 	if msg != nil {
 		contentBlocks, _ = msg["content"].([]any)
@@ -1232,18 +1351,7 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any, ss *streami
 			}
 			output := extractToolResultContent(blockMap)
 			isError, _ := blockMap["is_error"].(bool)
-			var state map[string]any
-			if isError {
-				state = map[string]any{
-					"status": "error",
-					"error":  output,
-				}
-			} else {
-				state = map[string]any{
-					"status": "completed",
-					"output": output,
-				}
-			}
+			state := toolCompletedState(meta, output, isError)
 			result = append(result, frame("message.part.updated", map[string]any{
 				"sessionID": sessionID,
 				"part": map[string]any{
@@ -1338,18 +1446,7 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any, ss *streami
 			}
 			output := extractToolResultContent(blockMap)
 			isError, _ := blockMap["is_error"].(bool)
-			var state map[string]any
-			if isError {
-				state = map[string]any{
-					"status": "error",
-					"error":  output,
-				}
-			} else {
-				state = map[string]any{
-					"status": "completed",
-					"output": output,
-				}
-			}
+			state := toolCompletedState(meta, output, isError)
 			result = append(result, frame("message.part.updated", map[string]any{
 				"sessionID": sessionID,
 				"part": map[string]any{
@@ -1393,6 +1490,135 @@ func extractToolResultContent(block map[string]any) string {
 		}
 		return ""
 	}
+}
+
+func normalizeToolInput(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	renames := map[string]string{
+		"file_path":   "filePath",
+		"old_string":  "oldString",
+		"new_string":  "newString",
+		"replace_all": "replaceAll",
+	}
+	for old, new := range renames {
+		if v, ok := input[old]; ok {
+			delete(input, old)
+			input[new] = v
+		}
+	}
+	return input
+}
+
+func toolCompletedState(meta *toolPartMeta, output string, isError bool) map[string]any {
+	state := map[string]any{
+		"status": "completed",
+		"input":  meta.input,
+		"title":  meta.toolName,
+		"output": output,
+		"metadata": map[string]any{
+			"output": output,
+		},
+	}
+	if desc, ok := meta.input["description"].(string); ok && desc != "" {
+		state["title"] = desc
+	}
+	if isError {
+		state["status"] = "error"
+		state["error"] = output
+		delete(state, "output")
+	}
+	toolLower := strings.ToLower(meta.toolName)
+	if toolLower == "edit" || toolLower == "fileedittool" {
+		if filediff := buildFileDiff(meta.input); filediff != nil {
+			state["metadata"] = map[string]any{
+				"output":   output,
+				"filediff": filediff,
+			}
+		}
+	}
+	if toolLower == "task" || toolLower == "agent" {
+		metadata := map[string]any{
+			"output": output,
+		}
+		if sessionID := extractAgentSessionID(output); sessionID != "" {
+			metadata["sessionId"] = sessionID
+		}
+		state["metadata"] = metadata
+	}
+	return state
+}
+
+func extractAgentSessionID(output string) string {
+	for _, prefix := range []string{"agentId: ", "task_id: "} {
+		if idx := strings.Index(output, prefix); idx >= 0 {
+			rest := output[idx+len(prefix):]
+			if end := strings.IndexAny(rest, " \n\r"); end >= 0 {
+				return rest[:end]
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
+func buildFileDiff(input map[string]any) map[string]any {
+	filePath, _ := input["filePath"].(string)
+	if filePath == "" {
+		return nil
+	}
+	before, _ := input["oldString"].(string)
+	after, _ := input["newString"].(string)
+	additions, deletions := countLineDiff(before, after)
+	return map[string]any{
+		"file":      filePath,
+		"before":    before,
+		"after":     after,
+		"additions": additions,
+		"deletions": deletions,
+	}
+}
+
+func countLineDiff(before, after string) (additions, deletions int) {
+	bLines := strings.Count(before, "\n")
+	aLines := strings.Count(after, "\n")
+	if before != "" && !strings.HasSuffix(before, "\n") {
+		bLines++
+	}
+	if after != "" && !strings.HasSuffix(after, "\n") {
+		aLines++
+	}
+	if aLines >= bLines {
+		additions = aLines - bLines
+		if bLines > 0 && aLines > 0 && aLines == bLines {
+			additions = aLines
+			deletions = bLines
+		}
+	} else {
+		deletions = bLines - aLines
+	}
+	return
+}
+
+func normalizeToolName(name string) string {
+	m := map[string]string{
+		"Agent":   "task",
+		"Task":    "task",
+		"Bash":    "bash",
+		"Read":    "read",
+		"Edit":    "edit",
+		"Write":   "write",
+		"Glob":    "glob",
+		"Grep":    "grep",
+		"LS":      "list",
+		"WebFetch": "webfetch",
+		"WebSearch": "websearch",
+	}
+	if v, ok := m[name]; ok {
+		return v
+	}
+	return name
 }
 
 func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFrame {
@@ -1585,7 +1811,7 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 		partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
 		if blockType == "tool_use" && contentBlock != nil {
 			toolID, _ := contentBlock["id"].(string)
-			toolName, _ := contentBlock["name"].(string)
+			toolName := normalizeToolName(contentBlock["name"].(string))
 			ss.blocks[index].toolID = toolID
 			ss.blocks[index].toolName = toolName
 		}
@@ -1686,11 +1912,9 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 			if block.text != "" {
 				_ = json.Unmarshal([]byte(block.text), &input)
 			}
-			if input == nil {
-				input = map[string]any{}
-			}
+			input = normalizeToolInput(input)
 			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
-			ss.toolUseParts[block.toolID] = &toolPartMeta{partID: partID, msgID: ss.msgID, toolName: block.toolName}
+			ss.toolUseParts[block.toolID] = &toolPartMeta{partID: partID, msgID: ss.msgID, toolName: block.toolName, input: input}
 			frames = append(frames, frame("message.part.updated", map[string]any{
 				"sessionID": sessionID,
 				"part": map[string]any{
