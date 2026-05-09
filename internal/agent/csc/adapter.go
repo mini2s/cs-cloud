@@ -660,7 +660,8 @@ type streamingState struct {
 	active       bool
 	sessionID    string
 	msgID        string
-	parentMsgID string
+	parentMsgID  string
+	turnParentID string
 	partSeq      uint64
 	stepStarted  bool
 	blocks       map[int]*blockState
@@ -799,6 +800,7 @@ func adaptEventPayload(eventName, joined string, ss *streamingState) []sseFrame 
 	case "session.result":
 		ss.active = false
 		ss.blocks = make(map[int]*blockState)
+		ss.turnParentID = ""
 		return []sseFrame{
 			frame("session.status", map[string]any{
 				"sessionID": sessionID,
@@ -987,11 +989,14 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 	msgID := fmt.Sprintf("msg_%d", seq)
 
 	var userMsgID string
-	if umid, ok := adapterString(payload["parent_tool_use_id"]); ok && umid != "" {
+	if ss.turnParentID != "" {
+		userMsgID = ss.turnParentID
+	} else if umid, ok := adapterString(payload["parent_tool_use_id"]); ok && umid != "" {
 		userMsgID = umid
 	}
 	if userMsgID == "" {
 		userMsgID = fmt.Sprintf("msg_%d", seq-1)
+		ss.turnParentID = userMsgID
 	}
 
 	info := map[string]any{
@@ -1256,6 +1261,8 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any, ss *streami
 		return result
 	}
 
+	ss.turnParentID = msgID
+
 	var modelID string
 	if m, ok := payload["model"].(string); ok && m != "" {
 		modelID = m
@@ -1519,8 +1526,13 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 			seq := atomic.AddUint64(&eventSeq, 1)
 			ss.msgID = fmt.Sprintf("msg_%d", seq)
 			ss.partSeq = atomic.AddUint64(&eventSeq, 1)
-			parentSeq := atomic.AddUint64(&eventSeq, 1)
-			ss.parentMsgID = fmt.Sprintf("msg_%d", parentSeq)
+			if ss.turnParentID != "" {
+				ss.parentMsgID = ss.turnParentID
+			} else {
+				parentSeq := atomic.AddUint64(&eventSeq, 1)
+				ss.parentMsgID = fmt.Sprintf("msg_%d", parentSeq)
+				ss.turnParentID = ss.parentMsgID
+			}
 			ss.stepStarted = true
 
 			frames = append(frames,
