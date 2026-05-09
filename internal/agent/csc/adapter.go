@@ -609,6 +609,21 @@ func buildMessageParts(msg map[string]any) []map[string]any {
 	return parts
 }
 
+type blockState struct {
+	blockType string
+	text      string
+}
+
+type streamingState struct {
+	active      bool
+	sessionID   string
+	msgID       string
+	parentMsgID string
+	partSeq     uint64
+	stepStarted bool
+	blocks      map[int]*blockState
+}
+
 func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go func() {
@@ -620,6 +635,9 @@ func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 
 		var eventName string
 		var dataLines []string
+		ss := &streamingState{
+			blocks: make(map[int]*blockState),
+		}
 
 		flush := func() error {
 			if len(dataLines) == 0 && eventName == "" {
@@ -628,7 +646,7 @@ func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 			joined := strings.Join(dataLines, "\n")
 			var frames []sseFrame
 			if strings.TrimSpace(joined) != "" {
-				frames = adaptEventPayload(eventName, joined)
+				frames = adaptEventPayload(eventName, joined, ss)
 			}
 			if len(frames) == 0 {
 				eventName = ""
@@ -693,7 +711,7 @@ type sseFrame struct {
 	data  string
 }
 
-func adaptEventPayload(eventName, joined string) []sseFrame {
+func adaptEventPayload(eventName, joined string, ss *streamingState) []sseFrame {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(joined), &payload); err != nil {
 		return []sseFrame{{event: eventName, data: joined}}
@@ -723,10 +741,15 @@ func adaptEventPayload(eventName, joined string) []sseFrame {
 			"info":      payload,
 		})}
 
+	case "session.stream_event":
+		return adaptStreamEvent(ss, sessionID, payload)
+
 	case "session.message":
-		return adaptMessageEvent(sessionID, payload)
+		return adaptMessageEvent(sessionID, payload, ss)
 
 	case "session.result":
+		ss.active = false
+		ss.blocks = make(map[int]*blockState)
 		return []sseFrame{
 			frame("session.status", map[string]any{
 				"sessionID": sessionID,
@@ -772,7 +795,7 @@ func extractSessionID(payload map[string]any) string {
 	return ""
 }
 
-func adaptMessageEvent(sessionID string, payload map[string]any) []sseFrame {
+func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingState) []sseFrame {
 	msgType, _ := payload["type"].(string)
 
 	if msgType == "user" {
@@ -781,6 +804,66 @@ func adaptMessageEvent(sessionID string, payload map[string]any) []sseFrame {
 
 	if msgType != "assistant" {
 		return nil
+	}
+
+	if ss.active && ss.sessionID == sessionID {
+		now := time.Now().UnixMilli()
+		var cost any = 0
+		if c, ok := payload["cost_usd"]; ok {
+			cost = c
+		}
+		tokens := map[string]any{
+			"input": 0, "output": 0, "reasoning": 0,
+			"cache": map[string]any{"read": 0, "write": 0},
+		}
+		if usage, ok := payload["usage"].(map[string]any); ok {
+			tokens = map[string]any{
+				"input":     usage["input_tokens"],
+				"output":    usage["output_tokens"],
+				"reasoning": 0,
+				"cache":     map[string]any{"read": 0, "write": 0},
+			}
+		}
+		infoCompleted := map[string]any{
+			"id":         ss.msgID,
+			"sessionID":  sessionID,
+			"role":       "assistant",
+			"parentID":   ss.parentMsgID,
+			"time":       map[string]any{"created": now, "completed": now},
+			"modelID":    "",
+			"providerID": extractProviderID(payload),
+			"mode":       "build",
+			"agent":      "build",
+			"path":       map[string]any{"cwd": sessionID, "root": sessionID},
+			"cost":       cost,
+			"tokens":     tokens,
+			"finish":     "stop",
+		}
+		if m, ok := payload["model"].(string); ok {
+			infoCompleted["modelID"] = m
+		}
+		result := []sseFrame{
+			frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        fmt.Sprintf("prt_%d_finish", ss.partSeq),
+					"sessionID": sessionID,
+					"messageID": ss.msgID,
+					"type":      "step-finish",
+					"reason":    "stop",
+					"cost":      cost,
+					"tokens":    tokens,
+				},
+				"time": now,
+			}),
+			frame("message.updated", map[string]any{
+				"sessionID": sessionID,
+				"info":      infoCompleted,
+			}),
+		}
+		ss.active = false
+		ss.blocks = make(map[int]*blockState)
+		return result
 	}
 
 	seq := atomic.AddUint64(&eventSeq, 1)
@@ -1080,6 +1163,194 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 			"request":   request,
 		})}
 	}
+}
+
+func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]any) []sseFrame {
+	rawEvent, _ := payload["event"].(map[string]any)
+	if rawEvent == nil {
+		return nil
+	}
+	eventType, _ := rawEvent["type"].(string)
+	now := time.Now().UnixMilli()
+
+	switch eventType {
+	case "message_start":
+		ss.active = true
+		ss.sessionID = sessionID
+		ss.msgID = ""
+		ss.stepStarted = false
+		ss.blocks = make(map[int]*blockState)
+		return nil
+
+	case "content_block_start":
+		if !ss.active || ss.sessionID != sessionID {
+			return nil
+		}
+		var frames []sseFrame
+		if !ss.stepStarted {
+			seq := atomic.AddUint64(&eventSeq, 1)
+			ss.msgID = fmt.Sprintf("msg_%d", seq)
+			ss.partSeq = atomic.AddUint64(&eventSeq, 1)
+			parentSeq := atomic.AddUint64(&eventSeq, 1)
+			ss.parentMsgID = fmt.Sprintf("msg_%d", parentSeq)
+			ss.stepStarted = true
+
+			frames = append(frames,
+				frame("session.status", map[string]any{
+					"sessionID": sessionID,
+					"status":    map[string]any{"type": "busy"},
+				}),
+				frame("message.updated", map[string]any{
+					"sessionID": sessionID,
+					"info": map[string]any{
+						"id":         ss.msgID,
+						"sessionID":  sessionID,
+						"role":       "assistant",
+						"parentID":   ss.parentMsgID,
+						"time":       map[string]any{"created": now},
+						"modelID":    "",
+						"providerID": extractProviderID(payload),
+						"mode":       "build",
+						"agent":      "build",
+						"path":       map[string]any{"cwd": sessionID, "root": sessionID},
+						"cost":       0,
+						"tokens": map[string]any{
+							"input": 0, "output": 0, "reasoning": 0,
+							"cache": map[string]any{"read": 0, "write": 0},
+						},
+					},
+				}),
+				frame("message.part.updated", map[string]any{
+					"sessionID": sessionID,
+					"part": map[string]any{
+						"id":        fmt.Sprintf("prt_%d_start", ss.partSeq),
+						"sessionID": sessionID,
+						"messageID": ss.msgID,
+						"type":      "step-start",
+					},
+					"time": now,
+				}),
+			)
+		}
+		index := 0
+		if idx, ok := rawEvent["index"].(float64); ok {
+			index = int(idx)
+		}
+		contentBlock, _ := rawEvent["content_block"].(map[string]any)
+		blockType := ""
+		if contentBlock != nil {
+			blockType, _ = contentBlock["type"].(string)
+		}
+		ss.blocks[index] = &blockState{blockType: blockType}
+		return frames
+
+	case "content_block_delta":
+		if !ss.active || ss.sessionID != sessionID {
+			return nil
+		}
+		index := 0
+		if idx, ok := rawEvent["index"].(float64); ok {
+			index = int(idx)
+		}
+		delta, _ := rawEvent["delta"].(map[string]any)
+		if delta == nil {
+			return nil
+		}
+		deltaType, _ := delta["type"].(string)
+		block := ss.blocks[index]
+		if block == nil {
+			block = &blockState{blockType: "text"}
+			ss.blocks[index] = block
+		}
+
+		switch deltaType {
+		case "text_delta":
+			text, _ := delta["text"].(string)
+			block.text += text
+			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
+			return []sseFrame{frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        partID,
+					"sessionID": sessionID,
+					"messageID": ss.msgID,
+					"type":      "text",
+					"text":      block.text,
+					"time":      map[string]any{"start": now, "end": now},
+				},
+				"time": now,
+			})}
+
+		case "thinking_delta":
+			thinking, _ := delta["thinking"].(string)
+			block.text += thinking
+			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
+			return []sseFrame{frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        partID,
+					"sessionID": sessionID,
+					"messageID": ss.msgID,
+					"type":      "reasoning",
+					"text":      block.text,
+					"time":      map[string]any{"start": now},
+				},
+				"time": now,
+			})}
+
+		case "input_json_delta":
+			partialJSON, _ := delta["partial_json"].(string)
+			block.text += partialJSON
+			return nil
+		}
+		return nil
+
+	case "content_block_stop":
+		if !ss.active || ss.sessionID != sessionID {
+			return nil
+		}
+		index := 0
+		if idx, ok := rawEvent["index"].(float64); ok {
+			index = int(idx)
+		}
+		block := ss.blocks[index]
+		if block == nil {
+			return nil
+		}
+		var frames []sseFrame
+		if block.blockType == "tool_use" {
+			var input map[string]any
+			if block.text != "" {
+				_ = json.Unmarshal([]byte(block.text), &input)
+			}
+			if input == nil {
+				input = map[string]any{}
+			}
+			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
+			frames = append(frames, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        partID,
+					"sessionID": sessionID,
+					"messageID": ss.msgID,
+					"type":      "tool",
+					"state": map[string]any{
+						"status": "completed",
+						"input":  input,
+						"title":  block.text,
+					},
+				},
+				"time": now,
+			}))
+		}
+		delete(ss.blocks, index)
+		return frames
+
+	case "message_delta", "message_stop":
+		return nil
+	}
+
+	return nil
 }
 
 func frame(typeName string, properties map[string]any) sseFrame {
