@@ -1242,6 +1242,35 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 			blockType, _ = contentBlock["type"].(string)
 		}
 		ss.blocks[index] = &blockState{blockType: blockType}
+		partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
+		switch blockType {
+		case "text":
+			frames = append(frames, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        partID,
+					"sessionID": sessionID,
+					"messageID": ss.msgID,
+					"type":      "text",
+					"text":      "",
+					"time":      map[string]any{"start": now},
+				},
+				"time": now,
+			}))
+		case "thinking":
+			frames = append(frames, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        partID,
+					"sessionID": sessionID,
+					"messageID": ss.msgID,
+					"type":      "reasoning",
+					"text":      "",
+					"time":      map[string]any{"start": now},
+				},
+				"time": now,
+			}))
+		}
 		return frames
 
 	case "content_block_delta":
@@ -1266,36 +1295,24 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 		switch deltaType {
 		case "text_delta":
 			text, _ := delta["text"].(string)
-			block.text += text
 			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
-			return []sseFrame{frame("message.part.updated", map[string]any{
+			return []sseFrame{frame("message.part.delta", map[string]any{
 				"sessionID": sessionID,
-				"part": map[string]any{
-					"id":        partID,
-					"sessionID": sessionID,
-					"messageID": ss.msgID,
-					"type":      "text",
-					"text":      block.text,
-					"time":      map[string]any{"start": now, "end": now},
-				},
-				"time": now,
+				"messageID": ss.msgID,
+				"partID":    partID,
+				"field":     "text",
+				"delta":     text,
 			})}
 
 		case "thinking_delta":
 			thinking, _ := delta["thinking"].(string)
-			block.text += thinking
 			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
-			return []sseFrame{frame("message.part.updated", map[string]any{
+			return []sseFrame{frame("message.part.delta", map[string]any{
 				"sessionID": sessionID,
-				"part": map[string]any{
-					"id":        partID,
-					"sessionID": sessionID,
-					"messageID": ss.msgID,
-					"type":      "reasoning",
-					"text":      block.text,
-					"time":      map[string]any{"start": now},
-				},
-				"time": now,
+				"messageID": ss.msgID,
+				"partID":    partID,
+				"field":     "text",
+				"delta":     thinking,
 			})}
 
 		case "input_json_delta":
