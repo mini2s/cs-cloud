@@ -219,11 +219,11 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 			Messages []map[string]any `json:"messages"`
 		}
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
-			// 前端期望 [{info: Message, parts: Part[]}] 格式的数组
 			result := make([]map[string]any, 0, len(payload.Messages))
+			toolUseParts := map[string]map[string]any{}
 			for _, msg := range payload.Messages {
 				normalizeMessage(msg)
-				parts := buildMessageParts(msg)
+				parts := buildMessageParts(msg, toolUseParts)
 				result = append(result, map[string]any{
 					"info":  msg,
 					"parts": parts,
@@ -526,7 +526,7 @@ func extractProviderID(payload map[string]any) string {
 }
 
 // buildMessageParts 将 csc message 的 content 字段转换为前端 Part 数组格式
-func buildMessageParts(msg map[string]any) []map[string]any {
+func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]any) []map[string]any {
 	id, _ := adapterString(msg["id"])
 	sessionID, _ := adapterString(msg["sessionID"])
 	role, _ := adapterString(msg["role"])
@@ -563,11 +563,35 @@ func buildMessageParts(msg map[string]any) []map[string]any {
 			for i, item := range v {
 				if block, ok := item.(map[string]any); ok {
 					blockType, _ := adapterString(block["type"])
-					if blockType == "text" {
+					switch blockType {
+					case "text":
 						parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
 							"type": "text",
 							"text": block["text"],
 						}))
+					case "tool_result":
+						toolUseID, _ := block["tool_use_id"].(string)
+						if toolUseID == "" {
+							continue
+						}
+						toolPart, tracked := toolUseParts[toolUseID]
+						if !tracked {
+							continue
+						}
+						state, _ := toolPart["state"].(map[string]any)
+						if state == nil {
+							state = map[string]any{}
+							toolPart["state"] = state
+						}
+						output := extractToolResultContent(block)
+						isError, _ := block["is_error"].(bool)
+						if isError {
+							state["status"] = "error"
+							state["error"] = output
+						} else {
+							state["status"] = "completed"
+							state["output"] = output
+						}
 					}
 				}
 			}
@@ -590,16 +614,23 @@ func buildMessageParts(msg map[string]any) []map[string]any {
 					"text": block["text"],
 				}))
 			case "tool_use":
-				parts = append(parts, makePart(fmt.Sprintf("tool-%d", i), map[string]any{
+				toolID, _ := block["id"].(string)
+				toolName, _ := block["name"].(string)
+				state := map[string]any{
+					"status": "completed",
+					"input":  block["input"],
+					"title":  toolName,
+				}
+				part := makePart(fmt.Sprintf("tool-%d", i), map[string]any{
 					"type":   "tool",
-					"callID": block["id"],
-					"tool":   block["name"],
-					"state": map[string]any{
-						"status": "completed",
-						"input":  block["input"],
-						"title":  block["name"],
-					},
-				}))
+					"callID": toolID,
+					"tool":   toolName,
+					"state":  state,
+				})
+				parts = append(parts, part)
+				if toolID != "" {
+					toolUseParts[toolID] = part
+				}
 			case "thinking":
 				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
 					"type":     "reasoning",
@@ -615,16 +646,25 @@ func buildMessageParts(msg map[string]any) []map[string]any {
 type blockState struct {
 	blockType string
 	text      string
+	toolID    string
+	toolName  string
+}
+
+type toolPartMeta struct {
+	partID   string
+	msgID    string
+	toolName string
 }
 
 type streamingState struct {
-	active      bool
-	sessionID   string
-	msgID       string
+	active       bool
+	sessionID    string
+	msgID        string
 	parentMsgID string
-	partSeq     uint64
-	stepStarted bool
-	blocks      map[int]*blockState
+	partSeq      uint64
+	stepStarted  bool
+	blocks       map[int]*blockState
+	toolUseParts map[string]*toolPartMeta
 }
 
 func wrapEventStream(body io.ReadCloser) io.ReadCloser {
@@ -639,7 +679,8 @@ func wrapEventStream(body io.ReadCloser) io.ReadCloser {
 		var eventName string
 		var dataLines []string
 		ss := &streamingState{
-			blocks: make(map[int]*blockState),
+			blocks:       make(map[int]*blockState),
+			toolUseParts: make(map[string]*toolPartMeta),
 		}
 
 		flush := func() error {
@@ -816,7 +857,7 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 	msgType, _ := payload["type"].(string)
 
 	if msgType == "user" {
-		return adaptUserMessageEvent(sessionID, payload)
+		return adaptUserMessageEvent(sessionID, payload, ss)
 	}
 
 	if msgType != "assistant" {
@@ -859,25 +900,73 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 		if m, ok := payload["model"].(string); ok {
 			infoCompleted["modelID"] = m
 		}
-		result := []sseFrame{
-			frame("message.part.updated", map[string]any{
-				"sessionID": sessionID,
-				"part": map[string]any{
-					"id":        fmt.Sprintf("prt_%d_finish", ss.partSeq),
-					"sessionID": sessionID,
-					"messageID": ss.msgID,
-					"type":      "step-finish",
-					"reason":    "stop",
-					"cost":      cost,
-					"tokens":    tokens,
-				},
-				"time": now,
-			}),
-			frame("message.updated", map[string]any{
-				"sessionID": sessionID,
-				"info":      infoCompleted,
-			}),
+
+		result := []sseFrame{}
+
+		if msg, ok := payload["message"].(map[string]any); ok {
+			if content, ok := msg["content"].([]any); ok {
+				for i, block := range content {
+					blockMap, ok := block.(map[string]any)
+					if !ok {
+						continue
+					}
+					blockType, _ := blockMap["type"].(string)
+					if blockType != "tool_use" {
+						continue
+					}
+					toolName, _ := blockMap["name"].(string)
+					toolID, _ := blockMap["id"].(string)
+					if toolID == "" {
+						continue
+					}
+					if _, exists := ss.toolUseParts[toolID]; exists {
+						continue
+					}
+					input := blockMap["input"]
+					if input == nil {
+						input = map[string]any{}
+					}
+					partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, i)
+					ss.toolUseParts[toolID] = &toolPartMeta{partID: partID, msgID: ss.msgID, toolName: toolName}
+					result = append(result, frame("message.part.updated", map[string]any{
+						"sessionID": sessionID,
+						"part": map[string]any{
+							"id":        partID,
+							"sessionID": sessionID,
+							"messageID": ss.msgID,
+							"type":      "tool",
+							"callID":    toolID,
+							"tool":      toolName,
+							"state": map[string]any{
+								"status": "running",
+								"input":  input,
+								"title":  toolName,
+							},
+						},
+						"time": now,
+					}))
+				}
+			}
 		}
+
+		result = append(result, frame("message.part.updated", map[string]any{
+			"sessionID": sessionID,
+			"part": map[string]any{
+				"id":        fmt.Sprintf("prt_%d_finish", ss.partSeq),
+				"sessionID": sessionID,
+				"messageID": ss.msgID,
+				"type":      "step-finish",
+				"reason":    "stop",
+				"cost":      cost,
+				"tokens":    tokens,
+			},
+			"time": now,
+		}))
+		result = append(result, frame("message.updated", map[string]any{
+			"sessionID": sessionID,
+			"info":      infoCompleted,
+		}))
+
 		ss.active = false
 		ss.blocks = make(map[int]*blockState)
 		return result
@@ -941,7 +1030,8 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 			info["modelID"] = model
 		}
 
-		if content, ok := msg["content"].([]any); ok {
+		content, contentOK := msg["content"].([]any)
+		if contentOK {
 			partSeq := atomic.AddUint64(&eventSeq, 1)
 
 			parts = append(parts, frame("message.part.updated", map[string]any{
@@ -985,6 +1075,7 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 					if input == nil {
 						input = map[string]any{}
 					}
+					ss.toolUseParts[toolID] = &toolPartMeta{partID: partID, msgID: msgID, toolName: toolName}
 					parts = append(parts, frame("message.part.updated", map[string]any{
 						"sessionID": sessionID,
 						"part": map[string]any{
@@ -995,7 +1086,7 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 							"callID":    toolID,
 							"tool":      toolName,
 							"state": map[string]any{
-								"status": "completed",
+								"status": "running",
 								"input":  input,
 								"title":  toolName,
 							},
@@ -1077,26 +1168,17 @@ func adaptMessageEvent(sessionID string, payload map[string]any, ss *streamingSt
 	return result
 }
 
-func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame {
+func adaptUserMessageEvent(sessionID string, payload map[string]any, ss *streamingState) []sseFrame {
 	seq := atomic.AddUint64(&eventSeq, 1)
 	now := time.Now().UnixMilli()
 	msgID := fmt.Sprintf("msg_%d", seq)
-
-	text := ""
-	if content, ok := payload["content"].(string); ok {
-		text = content
-	} else if msg, ok := payload["message"].(map[string]any); ok {
-		if c, ok := msg["content"].(string); ok {
-			text = c
-		}
-	}
 
 	var modelID string
 	if m, ok := payload["model"].(string); ok && m != "" {
 		modelID = m
 	}
 
-	return []sseFrame{
+	result := []sseFrame{
 		frame("message.updated", map[string]any{
 			"sessionID": sessionID,
 			"info": map[string]any{
@@ -1108,17 +1190,117 @@ func adaptUserMessageEvent(sessionID string, payload map[string]any) []sseFrame 
 				"model":     map[string]any{"providerID": extractProviderID(payload), "modelID": modelID},
 			},
 		}),
-		frame("message.part.updated", map[string]any{
-			"sessionID": sessionID,
-			"part": map[string]any{
-				"id":        fmt.Sprintf("prt_%d_0", seq),
-				"type":      "text",
-				"text":      text,
-				"messageID": msgID,
+	}
+
+	msg, _ := payload["message"].(map[string]any)
+	var contentBlocks []any
+	if msg != nil {
+		contentBlocks, _ = msg["content"].([]any)
+	}
+	if contentBlocks == nil {
+		if c, ok := payload["content"].(string); ok {
+			result = append(result, frame("message.part.updated", map[string]any{
 				"sessionID": sessionID,
-			},
-			"time": now,
-		}),
+				"part": map[string]any{
+					"id":        fmt.Sprintf("prt_%d_0", seq),
+					"type":      "text",
+					"text":      c,
+					"messageID": msgID,
+					"sessionID": sessionID,
+				},
+				"time": now,
+			}))
+			return result
+		}
+	}
+
+	for _, block := range contentBlocks {
+		blockMap, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		blockType, _ := blockMap["type"].(string)
+		switch blockType {
+		case "text":
+			text, _ := blockMap["text"].(string)
+			result = append(result, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        fmt.Sprintf("prt_%d_txt", seq),
+					"type":      "text",
+					"text":      text,
+					"messageID": msgID,
+					"sessionID": sessionID,
+				},
+				"time": now,
+			}))
+		case "tool_result":
+			toolUseID, _ := blockMap["tool_use_id"].(string)
+			if toolUseID == "" {
+				continue
+			}
+			meta, tracked := ss.toolUseParts[toolUseID]
+			if !tracked {
+				continue
+			}
+			output := extractToolResultContent(blockMap)
+			isError, _ := blockMap["is_error"].(bool)
+			status := "completed"
+			var state map[string]any
+			if isError {
+				status = "error"
+				state = map[string]any{
+					"status": status,
+					"error":  output,
+				}
+			} else {
+				state = map[string]any{
+					"status": status,
+					"output": output,
+				}
+			}
+			result = append(result, frame("message.part.updated", map[string]any{
+				"sessionID": sessionID,
+				"part": map[string]any{
+					"id":        meta.partID,
+					"sessionID": sessionID,
+					"messageID": meta.msgID,
+					"type":      "tool",
+					"callID":    toolUseID,
+					"tool":      meta.toolName,
+					"state":     state,
+				},
+				"time": now,
+			}))
+		}
+	}
+
+	return result
+}
+
+func extractToolResultContent(block map[string]any) string {
+	content := block["content"]
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if t, ok := m["type"].(string); ok && t == "text" {
+					if text, ok := m["text"].(string); ok {
+						parts = append(parts, text)
+					}
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		if content != nil {
+			b, _ := json.Marshal(content)
+			return string(b)
+		}
+		return ""
 	}
 }
 
@@ -1297,6 +1479,12 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 		}
 		ss.blocks[index] = &blockState{blockType: blockType}
 		partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
+		if blockType == "tool_use" && contentBlock != nil {
+			toolID, _ := contentBlock["id"].(string)
+			toolName, _ := contentBlock["name"].(string)
+			ss.blocks[index].toolID = toolID
+			ss.blocks[index].toolName = toolName
+		}
 		switch blockType {
 		case "text":
 			frames = append(frames, frame("message.part.updated", map[string]any{
@@ -1398,6 +1586,7 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 				input = map[string]any{}
 			}
 			partID := fmt.Sprintf("prt_%d_%d", ss.partSeq, index)
+			ss.toolUseParts[block.toolID] = &toolPartMeta{partID: partID, msgID: ss.msgID, toolName: block.toolName}
 			frames = append(frames, frame("message.part.updated", map[string]any{
 				"sessionID": sessionID,
 				"part": map[string]any{
@@ -1405,10 +1594,12 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 					"sessionID": sessionID,
 					"messageID": ss.msgID,
 					"type":      "tool",
+					"callID":    block.toolID,
+					"tool":      block.toolName,
 					"state": map[string]any{
-						"status": "completed",
+						"status": "running",
 						"input":  input,
-						"title":  block.text,
+						"title":  block.toolName,
 					},
 				},
 				"time": now,
