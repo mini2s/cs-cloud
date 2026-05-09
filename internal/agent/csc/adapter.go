@@ -591,11 +591,14 @@ func buildMessageParts(msg map[string]any) []map[string]any {
 				}))
 			case "tool_use":
 				parts = append(parts, makePart(fmt.Sprintf("tool-%d", i), map[string]any{
-					"type":        "tool-invocation",
-					"toolName":    block["name"],
-					"toolCallID":  block["id"],
-					"state":       "result",
-					"input":       block["input"],
+					"type":   "tool",
+					"callID": block["id"],
+					"tool":   block["name"],
+					"state": map[string]any{
+						"status": "completed",
+						"input":  block["input"],
+						"title":  block["name"],
+					},
 				}))
 			case "thinking":
 				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
@@ -766,6 +769,20 @@ func adaptEventPayload(eventName, joined string, ss *streamingState) []sseFrame 
 
 	case "session.control_request":
 		return adaptControlRequestEvent(sessionID, payload)
+
+	case "session.permission_replied":
+		requestID, _ := adapterString(payload["request_id"])
+		return []sseFrame{frame("permission.replied", map[string]any{
+			"sessionID":  sessionID,
+			"requestID":  requestID,
+		})}
+
+	case "session.question_replied":
+		requestID, _ := adapterString(payload["request_id"])
+		return []sseFrame{frame("question.replied", map[string]any{
+			"sessionID":  sessionID,
+			"requestID":  requestID,
+		})}
 
 	default:
 		typeName, _ := payload["type"].(string)
@@ -1121,11 +1138,13 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 		if input == nil {
 			input = map[string]any{}
 		}
+		patterns := extractPatterns(toolName, input)
+		permissionKey := toPermissionKey(toolName)
 		return []sseFrame{frame("permission.asked", map[string]any{
 			"id":         requestID,
 			"sessionID":  sessionID,
-			"permission": toolName,
-			"patterns":   []string{},
+			"permission": permissionKey,
+			"patterns":   patterns,
 			"metadata":   map[string]any{"input": input},
 			"always":     []string{},
 			"tool": map[string]any{
@@ -1163,6 +1182,41 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 			"request":   request,
 		})}
 	}
+}
+
+func extractPatterns(toolName string, input any) []string {
+	m, ok := input.(map[string]any)
+	if !ok {
+		return []string{}
+	}
+	var patterns []string
+	for _, key := range []string{"file_path", "path", "pattern", "glob"} {
+		if v, ok := adapterString(m[key]); ok && v != "" {
+			patterns = append(patterns, v)
+		}
+	}
+	if v, ok := adapterString(m["command"]); ok && v != "" {
+		patterns = append(patterns, v)
+	}
+	if len(patterns) == 0 {
+		return []string{}
+	}
+	return patterns
+}
+
+func toPermissionKey(toolName string) string {
+	var knownPascal = map[string]string{
+		"Read": "read", "Edit": "edit", "Write": "edit",
+		"Glob": "glob", "Grep": "grep", "LS": "list",
+		"Bash": "bash", "PowerShell": "bash",
+		"Agent": "task",
+		"WebFetch": "webfetch", "WebSearch": "websearch",
+		"TodoRead": "todoread", "TodoWrite": "todowrite",
+	}
+	if v, ok := knownPascal[toolName]; ok {
+		return v
+	}
+	return strings.ToLower(toolName)
 }
 
 func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]any) []sseFrame {
