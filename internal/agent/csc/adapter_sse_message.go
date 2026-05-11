@@ -372,10 +372,16 @@ func (a *AdapterServer) adaptMessageEvent(sessionID string, payload map[string]a
 }
 
 func (a *AdapterServer) adaptUserMessageEvent(sessionID string, payload map[string]any, ss *streamingState) []sseFrame {
+	if isMeta, _ := payload["isMeta"].(bool); isMeta {
+		return nil
+	}
 	msg, _ := payload["message"].(map[string]any)
 	if msg != nil {
 		if content, ok := msg["content"].(string); ok {
 			if content == "[Request interrupted by user]" || content == "[Request interrupted by user for tool use]" {
+				return nil
+			}
+			if containsLocalCommandTags(content) {
 				return nil
 			}
 		}
@@ -388,6 +394,9 @@ func (a *AdapterServer) adaptUserMessageEvent(sessionID string, payload map[stri
 				if blockMap["type"] == "text" {
 					text, _ := blockMap["text"].(string)
 					if text == "[Request interrupted by user]" || text == "[Request interrupted by user for tool use]" {
+						return nil
+					}
+					if containsLocalCommandTags(text) {
 						return nil
 					}
 				}

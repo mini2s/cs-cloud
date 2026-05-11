@@ -15,13 +15,14 @@ import (
 )
 
 type AdapterServer struct {
-	upstream     *url.URL
-	http         *http.Server
-	ln           net.Listener
-	url          string
-	mu           sync.Mutex
-	closed       bool
-	pendingFiles sync.Map
+	upstream      *url.URL
+	http          *http.Server
+	ln            net.Listener
+	url           string
+	mu            sync.Mutex
+	closed        bool
+	pendingFiles  sync.Map
+	sessionModels sync.Map // sessionID -> {modelID, providerID}
 }
 
 type sseFrame struct {
@@ -165,7 +166,7 @@ func (a *AdapterServer) adaptResponse(path string, resp *http.Response) error {
 		return err
 	}
 	_ = resp.Body.Close()
-	adapted, changed, err := adaptJSON(path, body)
+	adapted, changed, err := a.adaptJSON(path, body)
 	if err != nil || !changed {
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		return nil

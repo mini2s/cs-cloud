@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func adaptJSON(path string, body []byte) ([]byte, bool, error) {
+func (a *AdapterServer) adaptJSON(path string, body []byte) ([]byte, bool, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
 		return body, false, nil
@@ -22,6 +22,7 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 		if err := json.Unmarshal(trimmed, &payload); err == nil && payload.Sessions != nil {
 			for _, session := range payload.Sessions {
 				normalizeSession(session)
+				a.cacheSessionModel(session)
 			}
 			out, err := json.Marshal(payload.Sessions)
 			return out, err == nil, err
@@ -29,6 +30,7 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 		var single map[string]any
 		if err := json.Unmarshal(trimmed, &single); err == nil {
 			normalizeSession(single)
+			a.cacheSessionModel(single)
 			out, err := json.Marshal(single)
 			return out, err == nil, err
 		}
@@ -48,6 +50,7 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 								session["type"] = "idle"
 							}
 						}
+						a.cacheSessionModel(session)
 					}
 				}
 				out, err := json.Marshal(sessions)
@@ -60,6 +63,7 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 		var payload map[string]any
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
 			normalizeSession(payload)
+			a.cacheSessionModel(payload)
 			out, err := json.Marshal(payload)
 			return out, err == nil, err
 		}
@@ -106,27 +110,64 @@ func adaptJSON(path string, body []byte) ([]byte, bool, error) {
 			out, err := json.Marshal(payload)
 			return out, err == nil, err
 		}
-	case strings.HasSuffix(path, "/message"):
+case strings.HasSuffix(path, "/message"):
 		var payload struct {
 			Messages []map[string]any `json:"messages"`
 		}
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
+			sessionID := extractPathSegment(path, -2)
+			sessionModel, _ := a.sessionModels.Load(sessionID)
 			result := make([]map[string]any, 0, len(payload.Messages))
 			toolUseParts := map[string]map[string]any{}
+			var rootUserID string
 			for _, msg := range payload.Messages {
+				if isLocalCommandMessage(msg) {
+					continue
+				}
+				if isInterruptMessage(msg) {
+					markLastAssistantAborted(result)
+					continue
+				}
 				normalizeMessage(msg)
+				role, _ := adapterString(msg["role"])
 				parts := buildMessageParts(msg, toolUseParts)
-				result = append(result, map[string]any{
-					"info":  msg,
-					"parts": parts,
-				})
+				if role == "user" && len(parts) == 0 {
+					continue
+				}
+				switch role {
+				case "user":
+					rootUserID, _ = adapterString(msg["id"])
+					if _, exists := msg["model"]; !exists {
+						if modelMap, ok := sessionModel.(map[string]string); ok {
+							msg["model"] = map[string]any{
+								"providerID": modelMap["providerID"],
+								"modelID":    modelMap["modelID"],
+							}
+						}
+					}
+				case "assistant":
+					if rootUserID != "" {
+						msg["parentID"] = rootUserID
+						msg["parent_id"] = rootUserID
+					}
+					if _, exists := msg["modelID"]; !exists {
+						if modelMap, ok := sessionModel.(map[string]string); ok {
+							msg["modelID"] = modelMap["modelID"]
+							msg["providerID"] = modelMap["providerID"]
+						}
+					}
 			}
-			out, err := json.Marshal(result)
-			return out, err == nil, err
+			result = append(result, map[string]any{
+				"info":  msg,
+				"parts": parts,
+			})
 		}
+		out, err := json.Marshal(result)
+		return out, err == nil, err
 	}
+}
 
-	return body, false, nil
+return body, false, nil
 }
 
 func normalizeSession(session map[string]any) {
@@ -337,7 +378,7 @@ func normalizeMessage(msg map[string]any) {
 	}
 	if timestamp, ok := msg["timestamp"]; ok {
 		msg["created_at"] = timestamp
-		msg["time"] = map[string]any{"created": timestamp}
+		msg["time"] = map[string]any{"created": timestamp, "completed": timestamp}
 	}
 	if role, ok := adapterString(msg["role"]); ok {
 		msg["role"] = role
@@ -349,6 +390,55 @@ func normalizeMessage(msg map[string]any) {
 			msg["role"] = "user"
 		}
 	}
+
+	var modelID string
+	if m, ok := adapterString(msg["model"]); ok {
+		modelID = m
+		msg["modelID"] = m
+	}
+	if modelID == "" {
+		if msgObj, ok := msg["message"].(map[string]any); ok {
+			if m, ok := adapterString(msgObj["model"]); ok {
+				modelID = m
+				msg["modelID"] = m
+			}
+		}
+	}
+	providerID := extractProviderID(msg)
+	if providerID == "" {
+		if msgObj, ok := msg["message"].(map[string]any); ok {
+			providerID = extractProviderID(msgObj)
+			if providerID != "" {
+				msg["providerID"] = providerID
+			}
+		}
+	}
+	if providerID != "" {
+		msg["providerID"] = providerID
+	}
+
+	role, _ := adapterString(msg["role"])
+	switch role {
+	case "user":
+		adapterSetDefault(msg, "agent", "build")
+		if modelID != "" || providerID != "" {
+			if _, exists := msg["model"]; exists {
+				delete(msg, "model")
+			}
+			msg["model"] = map[string]any{
+				"providerID": providerID,
+				"modelID":    modelID,
+			}
+		}
+	case "assistant":
+		adapterSetDefault(msg, "agent", "build")
+		adapterSetDefault(msg, "mode", "build")
+		if _, exists := msg["path"]; !exists {
+			sessionID, _ := adapterString(msg["sessionID"])
+			msg["path"] = map[string]any{"cwd": sessionID, "root": sessionID}
+		}
+	}
+
 	adapterSetDefault(msg, "cost", 0)
 	adapterSetDefault(msg, "tokens", map[string]any{
 		"input":     0,
@@ -358,9 +448,104 @@ func normalizeMessage(msg map[string]any) {
 	})
 }
 
+func (a *AdapterServer) cacheSessionModel(session map[string]any) {
+	sessionID, _ := adapterString(session["sessionID"])
+	if sessionID == "" {
+		sessionID, _ = adapterString(session["id"])
+	}
+	if sessionID == "" {
+		return
+	}
+	modelID, _ := adapterString(session["model"])
+	providerID := extractProviderID(session)
+	if modelID != "" || providerID != "" {
+		a.sessionModels.Store(sessionID, map[string]string{
+			"modelID":    modelID,
+			"providerID": providerID,
+		})
+	}
+}
+
 func adapterSetDefault(m map[string]any, key string, value any) {
 	if _, ok := m[key]; !ok {
 		m[key] = value
+	}
+}
+
+var localCommandTags = []string{
+	"<local-command-stdout>",
+	"<local-command-stderr>",
+	"<local-command-caveat>",
+	"<command-name>",
+	"<command-message>",
+	"<command-args>",
+}
+
+func containsLocalCommandTags(content string) bool {
+	for _, tag := range localCommandTags {
+		if strings.Contains(content, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalCommandMessage(msg map[string]any) bool {
+	if isMeta, _ := msg["isMeta"].(bool); isMeta {
+		return true
+	}
+	content, _ := msg["content"].(string)
+	if content == "" {
+		return false
+	}
+	return containsLocalCommandTags(content)
+}
+
+var interruptMessages = []string{
+	"[Request interrupted by user]",
+	"[Request interrupted by user for tool use]",
+}
+
+func isInterruptMessage(msg map[string]any) bool {
+	switch v := msg["content"].(type) {
+	case string:
+		for _, m := range interruptMessages {
+			if v == m {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			text, _ := block["text"].(string)
+			for _, m := range interruptMessages {
+				if text == m {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func markLastAssistantAborted(result []map[string]any) {
+	for i := len(result) - 1; i >= 0; i-- {
+		info, ok := result[i]["info"].(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := adapterString(info["role"])
+		if role != "assistant" {
+			continue
+		}
+		info["error"] = map[string]any{
+			"name": "MessageAbortedError",
+			"data": map[string]any{"message": "Interrupted"},
+		}
+		return
 	}
 }
 

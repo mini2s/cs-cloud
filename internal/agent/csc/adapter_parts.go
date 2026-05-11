@@ -121,11 +121,13 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 						metadata["filediff"] = filediff
 					}
 				}
+				toolTime := extractMessageTime(msg)
 				state := map[string]any{
 					"status":   "completed",
 					"input":    inputMap,
 					"title":    title,
 					"metadata": metadata,
+					"time":     map[string]any{"start": toolTime, "end": toolTime},
 				}
 				part := makePart(fmt.Sprintf("tool-%d", i), map[string]any{
 					"type":   "tool",
@@ -156,12 +158,12 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 				}
 			case "thinking":
 				thinking, _ := block["thinking"].(string)
-				now := time.Now().UnixMilli()
+				msgTime := extractMessageTime(msg)
 				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
 					"type":     "reasoning",
 					"thinking": thinking,
 					"text":     thinking,
-					"time":     map[string]any{"start": now, "end": now},
+					"time":     map[string]any{"start": msgTime, "end": msgTime},
 				}))
 			}
 		}
@@ -384,4 +386,16 @@ func buildAgentPartsFromText(text, msgID, sessionID string, seq uint64) []map[st
 		})
 	}
 	return parts
+}
+
+func extractMessageTime(msg map[string]any) any {
+	if t, ok := msg["time"].(map[string]any); ok {
+		if created, ok := t["created"]; ok {
+			return created
+		}
+	}
+	if ts, ok := msg["timestamp"]; ok {
+		return ts
+	}
+	return time.Now().UnixMilli()
 }
