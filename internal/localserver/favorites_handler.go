@@ -1,6 +1,8 @@
 package localserver
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -209,16 +211,44 @@ func (s *Server) fetchLocalFavorites(r *http.Request) ([]favoriteItem, error) {
 	recorder := httptest.NewRecorder()
 	s.handleProxy(recorder, r)
 
+	body, err := io.ReadAll(recorder.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	// Bun server may return gzip-compressed responses; decompress before parsing.
+	if recorder.Header().Get("Content-Encoding") == "gzip" {
+		gr, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		defer gr.Close()
+		body, err = io.ReadAll(gr)
+		if err != nil {
+			return nil, fmt.Errorf("gzip decompress: %w", err)
+		}
+	}
+
 	if recorder.Code != http.StatusOK {
 		return nil, fmt.Errorf("proxy returned %d", recorder.Code)
 	}
 
+	// Try array format first (newer cs versions)
 	var items []favoriteItem
-	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
-		return nil, err
+	if err := json.Unmarshal(body, &items); err == nil {
+		return items, nil
 	}
 
-	return items, nil
+	// Fall back to wrapped object format (cs <= 3.0.33)
+	var wrapped struct {
+		Success bool           `json:"success"`
+		Items   []favoriteItem `json:"items"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Success {
+		return wrapped.Items, nil
+	}
+
+	return nil, fmt.Errorf("cannot unmarshal response: %s", string(body))
 }
 
 func mergeFavorites(cloud, local []favoriteItem) []favoriteItem {
