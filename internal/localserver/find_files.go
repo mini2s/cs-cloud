@@ -289,7 +289,7 @@ func matchScore(rel string, query string, matchRelativePath bool) int {
 			score = 60
 		}
 		if strings.HasSuffix(rel, "/") {
-			score -= 1
+			score += 5
 		}
 		return score
 	}
@@ -306,7 +306,7 @@ func matchScore(rel string, query string, matchRelativePath bool) int {
 		score = 60
 	}
 	if strings.HasSuffix(rel, "/") {
-		score -= 1
+		score += 5
 	}
 	return score
 }

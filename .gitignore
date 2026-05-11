@@ -19,3 +19,4 @@ device.json
 .goreleaser-after.sh
 data/
 internal/localserver/apidocs/
+.claude/
