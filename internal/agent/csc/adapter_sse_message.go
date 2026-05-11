@@ -398,6 +398,9 @@ func (a *AdapterServer) adaptUserMessageEvent(sessionID string, payload map[stri
 	seq := atomic.AddUint64(&eventSeq, 1)
 	now := time.Now().UnixMilli()
 	msgID := fmt.Sprintf("msg_%d", seq)
+	if uuid, ok := payload["uuid"].(string); ok && uuid != "" {
+		msgID = uuid
+	}
 
 	if msg == nil {
 		msg, _ = payload["message"].(map[string]any)
