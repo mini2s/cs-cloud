@@ -95,7 +95,10 @@ func (a *AdapterServer) adaptEventPayload(eventName, joined string, ss *streamin
 	if err := json.Unmarshal([]byte(joined), &payload); err != nil {
 		return []sseFrame{{event: eventName, data: joined}}
 	}
+	return a.adaptEventMap(eventName, payload, ss)
+}
 
+func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, ss *streamingState) []sseFrame {
 	sessionID := extractSessionID(payload)
 
 	switch eventName {
@@ -154,9 +157,14 @@ func (a *AdapterServer) adaptEventPayload(eventName, joined string, ss *streamin
 		if typeName == "" {
 			typeName = eventName
 		}
-		if typeName == "server.heartbeat" {
-			return []sseFrame{frame("server.heartbeat", map[string]any{})}
+		if typeName == "server.heartbeat" || typeName == "server.connected" {
+			return []sseFrame{frame(typeName, map[string]any{})}
 		}
+
+		if inner, _ := payload["properties"].(map[string]any); inner != nil {
+			return a.adaptEventMap(typeName, inner, ss)
+		}
+
 		props := map[string]any{}
 		for k, v := range payload {
 			props[k] = v

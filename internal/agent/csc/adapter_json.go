@@ -167,6 +167,13 @@ func normalizeSession(session map[string]any) {
 		if v, ok := session["last_active_at"]; ok {
 			timeObj["updated"] = v
 		}
+		if timeObj["created"] == nil {
+			now := time.Now().UnixMilli()
+			timeObj["created"] = now
+			if timeObj["updated"] == nil {
+				timeObj["updated"] = now
+			}
+		}
 		session["time"] = timeObj
 	}
 	if _, exists := session["backend"]; !exists {
