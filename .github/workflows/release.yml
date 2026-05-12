@@ -85,10 +85,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          rcurl() {
+            local max=3 delay=10 i=1
+            while [ $i -le $max ]; do
+              curl "$@" && return 0
+              echo "::warning::curl attempt $i/$max failed, retrying in ${delay}s..."
+              sleep $delay
+              i=$((i + 1))
+            done
+            return 1
+          }
+
           OWNER="xdfield"
           REPO="cs-cloud-release"
           TAG="${GITHUB_REF_NAME}"
-          TARGET_REF=$(curl -fsS \
+          TARGET_REF=$(rcurl -fsS \
             "https://gitee.com/api/v5/repos/${OWNER}/${REPO}?access_token=${GITEE_ACCESS_TOKEN}" \
             | jq -r '.default_branch // empty')
 
@@ -96,7 +107,7 @@ jobs:
             TARGET_REF=master
           fi
 
-          create_resp=$(curl -sS -X POST \
+          create_resp=$(rcurl -sS -X POST \
             "https://gitee.com/api/v5/repos/${OWNER}/${REPO}/tags" \
             --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" \
             --data-urlencode "tag_name=${TAG}" \
@@ -121,10 +132,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          rcurl() {
+            local max=3 delay=10 i=1
+            while [ $i -le $max ]; do
+              curl "$@" && return 0
+              echo "::warning::curl attempt $i/$max failed, retrying in ${delay}s..."
+              sleep $delay
+              i=$((i + 1))
+            done
+            return 1
+          }
+
           OWNER="xdfield"
           REPO="cs-cloud-release"
           TAG="${GITHUB_REF_NAME}"
-          TARGET_REF=$(curl -fsS \
+          TARGET_REF=$(rcurl -fsS \
             "https://gitee.com/api/v5/repos/${OWNER}/${REPO}?access_token=${GITEE_ACCESS_TOKEN}" \
             | jq -r '.default_branch // empty')
 
@@ -132,14 +154,14 @@ jobs:
             TARGET_REF=master
           fi
 
-          existing=$(curl -fsS \
+          existing=$(rcurl -fsS \
             "https://gitee.com/api/v5/repos/${OWNER}/${REPO}/releases/tags/${TAG}?access_token=${GITEE_ACCESS_TOKEN}" \
             || true)
 
           if [ -n "$existing" ] && [ "$(printf '%s' "$existing" | jq -r '.id // empty')" != "" ]; then
             release_id=$(printf '%s' "$existing" | jq -r '.id')
           else
-            created=$(curl -sS -X POST \
+            created=$(rcurl -sS -X POST \
               "https://gitee.com/api/v5/repos/${OWNER}/${REPO}/releases" \
               --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" \
               --data-urlencode "tag_name=${TAG}" \
@@ -164,13 +186,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          rcurl() {
+            local max=3 delay=10 i=1
+            while [ $i -le $max ]; do
+              curl "$@" && return 0
+              echo "::warning::curl attempt $i/$max failed, retrying in ${delay}s..."
+              sleep $delay
+              i=$((i + 1))
+            done
+            return 1
+          }
+
           OWNER="xdfield"
           REPO="cs-cloud-release"
           TAG="${GITHUB_REF_NAME}"
           RELEASE_ID="${{ steps.gitee-release.outputs.release_id }}"
           MAP_DIR=$(mktemp -d)
 
-          attachments=$(curl -fsS \
+          attachments=$(rcurl -fsS \
             "https://gitee.com/api/v5/repos/${OWNER}/${REPO}/releases/${RELEASE_ID}/attach_files?access_token=${GITEE_ACCESS_TOKEN}" \
             || printf '[]')
 
@@ -184,12 +217,12 @@ jobs:
 
               attach_id=$(printf '%s' "$attachments" | jq -r --arg name "$base" '.[] | select(.name == $name) | .id' | head -n 1)
               if [ -n "$attach_id" ]; then
-                curl -fsS -X DELETE \
+                rcurl -fsS -X DELETE \
                   "https://gitee.com/api/v5/repos/${OWNER}/${REPO}/releases/${RELEASE_ID}/attach_files/${attach_id}?access_token=${GITEE_ACCESS_TOKEN}" \
                   > /dev/null
               fi
 
-              resp=$(curl -fsS -X POST \
+              resp=$(rcurl -fsS -X POST \
                 "https://gitee.com/api/v5/repos/${OWNER}/${REPO}/releases/${RELEASE_ID}/attach_files" \
                 -F "access_token=${GITEE_ACCESS_TOKEN}" \
                 -F "file=@${f}")
