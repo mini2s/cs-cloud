@@ -61,8 +61,8 @@ func (a *AdapterServer) adaptMessageEvent(sessionID string, payload map[string]a
 			"time":       map[string]any{"created": now, "completed": now},
 			"modelID":    ss.modelID,
 			"providerID": ss.providerID,
-			"mode":       "build",
-			"agent":      "build",
+			"mode":       ss.agent,
+			"agent":      ss.agent,
 			"path":       map[string]any{"cwd": sessionID, "root": sessionID},
 			"cost":       cost,
 			"tokens":     tokens,
@@ -170,8 +170,8 @@ func (a *AdapterServer) adaptMessageEvent(sessionID string, payload map[string]a
 		"time":       map[string]any{"created": now},
 		"modelID":    "",
 		"providerID": extractProviderID(payload),
-		"mode":       "build",
-		"agent":      "build",
+		"mode":       ss.agent,
+		"agent":      ss.agent,
 		"path":       map[string]any{"cwd": sessionID, "root": sessionID},
 		"cost":       0,
 		"tokens": map[string]any{
@@ -493,7 +493,7 @@ func (a *AdapterServer) adaptUserMessageEvent(sessionID string, payload map[stri
 		"sessionID": sessionID,
 		"role":      "user",
 		"time":      map[string]any{"created": now},
-		"agent":     "build",
+		"agent":     ss.agent,
 	}
 	if modelID != "" || providerID != "" {
 		info["model"] = map[string]any{"providerID": providerID, "modelID": modelID}

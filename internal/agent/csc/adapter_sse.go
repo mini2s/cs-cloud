@@ -101,6 +101,13 @@ func (a *AdapterServer) adaptEventPayload(eventName, joined string, ss *streamin
 func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, ss *streamingState) []sseFrame {
 	sessionID := extractSessionID(payload)
 
+	// Update agent from stored session agent
+	if sessionID != "" {
+		if agent := a.getSessionAgent(sessionID); agent != "" {
+			ss.agent = agent
+		}
+	}
+
 	switch eventName {
 	case "session.created":
 		normalizeSession(payload)
@@ -230,8 +237,8 @@ func adaptResultEvent(sessionID string, payload map[string]any, ss *streamingSta
 					"time":       map[string]any{"created": now, "completed": now},
 					"modelID":    ss.modelID,
 					"providerID": ss.providerID,
-					"mode":       "build",
-					"agent":      "build",
+					"mode":       ss.agent,
+					"agent":      ss.agent,
 					"path":       map[string]any{"cwd": sessionID, "root": sessionID},
 					"cost":       0,
 					"tokens": map[string]any{

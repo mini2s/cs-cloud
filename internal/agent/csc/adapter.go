@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -23,6 +24,7 @@ type AdapterServer struct {
 	closed        bool
 	pendingFiles  sync.Map
 	sessionModels sync.Map // sessionID -> {modelID, providerID}
+	sessionAgents sync.Map // sessionID -> agentName
 }
 
 type sseFrame struct {
@@ -56,6 +58,7 @@ type streamingState struct {
 	toolUseParts map[string]*toolPartMeta
 	modelID      string
 	providerID   string
+	agent        string
 }
 
 var eventSeq uint64
@@ -93,6 +96,15 @@ func NewAdapterServer(rawEndpoint string) (*AdapterServer, error) {
 
 func (a *AdapterServer) URL() string { return a.url }
 
+func (a *AdapterServer) getSessionAgent(sessionID string) string {
+	if v, ok := a.sessionAgents.Load(sessionID); ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return "build"
+}
+
 func (a *AdapterServer) Close(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -116,6 +128,34 @@ func (a *AdapterServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 			r.Body.Close()
 			var parsed map[string]any
 			if json.Unmarshal(body, &parsed) == nil {
+				// Extract and store agent for this session
+				if agent, ok := parsed["agent"].(string); ok && agent != "" {
+					a.sessionAgents.Store(sessionID, agent)
+					// Inject agent part for csc to process
+					if parts, ok := parsed["parts"].([]any); ok {
+						hasAgentPart := false
+						for _, p := range parts {
+							if pm, ok := p.(map[string]any); ok {
+								if pm["type"] == "agent" {
+									hasAgentPart = true
+									break
+								}
+							}
+						}
+						if !hasAgentPart {
+							parsed["parts"] = append(parts, map[string]any{
+								"type": "agent",
+								"name": agent,
+							})
+						}
+					}
+					// Remove top-level agent field before forwarding to csc
+					delete(parsed, "agent")
+					newBody, err := json.Marshal(parsed)
+					if err == nil {
+						body = newBody
+					}
+				}
 				if parts, ok := parsed["parts"].([]any); ok {
 					var fileParts []map[string]any
 					for _, p := range parts {
@@ -134,8 +174,10 @@ func (a *AdapterServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+			r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			}
 		}
-	}
 
 	proxy := httputil.NewSingleHostReverseProxy(a.upstream)
 	originalDirector := proxy.Director

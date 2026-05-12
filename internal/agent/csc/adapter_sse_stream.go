@@ -65,8 +65,8 @@ func adaptStreamEvent(ss *streamingState, sessionID string, payload map[string]a
 						"time":       map[string]any{"created": now},
 						"modelID":    ss.modelID,
 						"providerID": ss.providerID,
-						"mode":       "build",
-						"agent":      "build",
+						"mode":       ss.agent,
+						"agent":      ss.agent,
 						"path":       map[string]any{"cwd": sessionID, "root": sessionID},
 						"cost":       0,
 						"tokens": map[string]any{
