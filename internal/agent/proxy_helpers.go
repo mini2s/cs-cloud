@@ -78,6 +78,9 @@ func TransformPromptBody(body io.ReadCloser) io.ReadCloser {
 		if model, ok := payload["model"]; ok {
 			transformed["model"] = model
 		}
+		if agentVal, ok := payload["agent"]; ok {
+			transformed["agent"] = agentVal
+		}
 
 		encoded, err := json.Marshal(transformed)
 		if err != nil {
