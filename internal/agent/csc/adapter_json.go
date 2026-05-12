@@ -128,7 +128,7 @@ case strings.HasSuffix(path, "/message"):
 					markLastAssistantAborted(result)
 					continue
 				}
-				normalizeMessage(msg)
+				normalizeMessage(msg, a.getSessionAgent(sessionID))
 				role, _ := adapterString(msg["role"])
 				parts := buildMessageParts(msg, toolUseParts)
 				if role == "user" && len(parts) == 0 {
@@ -361,9 +361,12 @@ func normalizeModelCapabilities(payload map[string]any) {
 	}
 }
 
-func normalizeMessage(msg map[string]any) {
+func normalizeMessage(msg map[string]any, agent string) {
 	if msg == nil {
 		return
+	}
+	if agent == "" {
+		agent = "build"
 	}
 	if id, ok := adapterString(msg["uuid"]); ok {
 		msg["id"] = id
@@ -420,7 +423,7 @@ func normalizeMessage(msg map[string]any) {
 	role, _ := adapterString(msg["role"])
 	switch role {
 	case "user":
-		adapterSetDefault(msg, "agent", "build")
+		adapterSetDefault(msg, "agent", agent)
 		if modelID != "" || providerID != "" {
 			if _, exists := msg["model"]; exists {
 				delete(msg, "model")
@@ -431,8 +434,8 @@ func normalizeMessage(msg map[string]any) {
 			}
 		}
 	case "assistant":
-		adapterSetDefault(msg, "agent", "build")
-		adapterSetDefault(msg, "mode", "build")
+		adapterSetDefault(msg, "agent", agent)
+		adapterSetDefault(msg, "mode", agent)
 		if _, exists := msg["path"]; !exists {
 			sessionID, _ := adapterString(msg["sessionID"])
 			msg["path"] = map[string]any{"cwd": sessionID, "root": sessionID}
