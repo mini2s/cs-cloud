@@ -49,6 +49,9 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 					switch blockType {
 					case "text":
 						text, _ := block["text"].(string)
+						if strings.TrimSpace(text) == "" {
+							continue
+						}
 						parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
 							"type": "text",
 							"text": text,
@@ -101,9 +104,13 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 			blockType, _ := adapterString(block["type"])
 			switch blockType {
 			case "text":
+				text, _ := block["text"].(string)
+				if strings.TrimSpace(text) == "" {
+					continue
+				}
 				parts = append(parts, makePart(fmt.Sprintf("text-%d", i), map[string]any{
 					"type": "text",
-					"text": block["text"],
+					"text": text,
 				}))
 			case "tool_use":
 				toolID, _ := block["id"].(string)
@@ -158,6 +165,9 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 				}
 			case "thinking":
 				thinking, _ := block["thinking"].(string)
+				if strings.TrimSpace(thinking) == "" {
+					continue
+				}
 				msgTime := extractMessageTime(msg)
 				parts = append(parts, makePart(fmt.Sprintf("think-%d", i), map[string]any{
 					"type":     "reasoning",

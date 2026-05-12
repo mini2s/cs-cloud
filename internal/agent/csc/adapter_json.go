@@ -117,9 +117,48 @@ case strings.HasSuffix(path, "/message"):
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
 			sessionID := extractPathSegment(path, -2)
 			sessionModel, _ := a.sessionModels.Load(sessionID)
+
+			msgRoles := make(map[string]string, len(payload.Messages))
+			msgParents := make(map[string]string, len(payload.Messages))
+			for _, msg := range payload.Messages {
+				id, _ := adapterString(msg["uuid"])
+				if id == "" {
+					continue
+				}
+				if isLocalCommandMessage(msg) {
+					continue
+				}
+				if isInterruptMessage(msg) {
+					continue
+				}
+				role := msg["role"]
+				if r, ok := role.(string); ok && r != "" {
+					msgRoles[id] = r
+				}
+				if p, _ := adapterString(msg["parent_uuid"]); p != "" {
+					msgParents[id] = p
+				}
+			}
+
+			resolveUserParent := func(parentUUID string) string {
+				visited := map[string]bool{}
+				cur := parentUUID
+				for cur != "" && !visited[cur] {
+					visited[cur] = true
+					r, ok := msgRoles[cur]
+					if !ok {
+						return cur
+					}
+					if r == "user" {
+						return cur
+					}
+					cur = msgParents[cur]
+				}
+				return cur
+			}
+
 			result := make([]map[string]any, 0, len(payload.Messages))
 			toolUseParts := map[string]map[string]any{}
-			var rootUserID string
 			for _, msg := range payload.Messages {
 				if isLocalCommandMessage(msg) {
 					continue
@@ -136,7 +175,6 @@ case strings.HasSuffix(path, "/message"):
 				}
 				switch role {
 				case "user":
-					rootUserID, _ = adapterString(msg["id"])
 					if _, exists := msg["model"]; !exists {
 						if modelMap, ok := sessionModel.(map[string]string); ok {
 							msg["model"] = map[string]any{
@@ -146,9 +184,11 @@ case strings.HasSuffix(path, "/message"):
 						}
 					}
 				case "assistant":
-					if rootUserID != "" {
-						msg["parentID"] = rootUserID
-						msg["parent_id"] = rootUserID
+					parentUUID, _ := adapterString(msg["parent_uuid"])
+					userParent := resolveUserParent(parentUUID)
+					if userParent != "" {
+						msg["parentID"] = userParent
+						msg["parent_id"] = userParent
 					}
 					if _, exists := msg["modelID"]; !exists {
 						if modelMap, ok := sessionModel.(map[string]string); ok {
@@ -156,15 +196,18 @@ case strings.HasSuffix(path, "/message"):
 							msg["providerID"] = modelMap["providerID"]
 						}
 					}
+				}
+				if len(parts) == 0 {
+					continue
+				}
+				result = append(result, map[string]any{
+					"info":  msg,
+					"parts": parts,
+				})
 			}
-			result = append(result, map[string]any{
-				"info":  msg,
-				"parts": parts,
-			})
+			out, err := json.Marshal(result)
+			return out, err == nil, err
 		}
-		out, err := json.Marshal(result)
-		return out, err == nil, err
-	}
 }
 
 return body, false, nil
