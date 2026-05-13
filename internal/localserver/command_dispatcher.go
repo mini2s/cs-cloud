@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -24,7 +26,65 @@ type commandEntry struct {
 	completedAt time.Time
 	result      any
 	errMsg      string
+	phase       string
+	progress    float64
+	message     string
 }
+
+type persistedEntry struct {
+	CommandID   string          `json:"command_id"`
+	Type        string          `json:"type"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	Timestamp   string          `json:"timestamp,omitempty"`
+	Status      string          `json:"status"`
+	StartedAt   time.Time       `json:"started_at"`
+	CompletedAt time.Time       `json:"completed_at"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	ErrMsg      string          `json:"err_msg,omitempty"`
+	Phase       string          `json:"phase,omitempty"`
+	Progress    float64         `json:"progress,omitempty"`
+	Message     string          `json:"message,omitempty"`
+}
+
+func (e *commandEntry) toPersisted() *persistedEntry {
+	pe := &persistedEntry{
+		CommandID:   e.req.CommandID,
+		Type:        e.req.Type,
+		Payload:     e.req.Payload,
+		Timestamp:   e.req.Timestamp,
+		Status:      e.status,
+		StartedAt:   e.startedAt,
+		CompletedAt: e.completedAt,
+		ErrMsg:      e.errMsg,
+		Phase:       e.phase,
+		Progress:    e.progress,
+		Message:     e.message,
+	}
+	if e.result != nil {
+		pe.Result, _ = json.Marshal(e.result)
+	}
+	return pe
+}
+
+func (pe *persistedEntry) toEntry() *commandEntry {
+	return &commandEntry{
+		req: &commandRequest{
+			CommandID: pe.CommandID,
+			Type:      pe.Type,
+			Payload:   pe.Payload,
+			Timestamp: pe.Timestamp,
+		},
+		status:      pe.Status,
+		startedAt:   pe.StartedAt,
+		completedAt: pe.CompletedAt,
+		errMsg:      pe.ErrMsg,
+		phase:       pe.Phase,
+		progress:    pe.Progress,
+		message:     pe.Message,
+	}
+}
+
+const commandStateFile = "command_status.json"
 
 type CommandDispatcher struct {
 	mu        sync.Mutex
@@ -37,11 +97,13 @@ type CommandDispatcher struct {
 }
 
 func NewCommandDispatcher(a *app.App, reporter *CommandReporter) *CommandDispatcher {
-	return &CommandDispatcher{
+	d := &CommandDispatcher{
 		active:   make(map[string]*commandEntry),
 		app:      a,
 		reporter: reporter,
 	}
+	d.restoreCommands()
+	return d
 }
 
 func (d *CommandDispatcher) BindUpdater(u *updater.Manager) {
@@ -105,7 +167,85 @@ func (d *CommandDispatcher) Status(commandID string) (*commandStatusResponse, er
 		return nil, fmt.Errorf("command %s not found", commandID)
 	}
 
-	return writeCommandStatus(entry.req, entry.status, entry.errMsg, entry.startedAt, entry.completedAt, entry.result), nil
+	return writeCommandStatusWithProgress(entry.req, entry.status, entry.errMsg, entry.startedAt, entry.completedAt, entry.result, entry.phase, entry.progress, entry.message), nil
+}
+
+func (d *CommandDispatcher) UpdateProgress(commandID, phase string, progress float64, message string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	entry, exists := d.active[commandID]
+	if !exists {
+		return
+	}
+	entry.phase = phase
+	entry.progress = progress
+	entry.message = message
+}
+
+func (d *CommandDispatcher) commandStatePath() string {
+	if d.app == nil {
+		return ""
+	}
+	return filepath.Join(d.app.RootDir(), commandStateFile)
+}
+
+func (d *CommandDispatcher) persistCommands() {
+	path := d.commandStatePath()
+	if path == "" {
+		return
+	}
+
+	d.mu.Lock()
+	var entries []*persistedEntry
+	for _, entry := range d.active {
+		if entry.status == "completed" || entry.status == "failed" {
+			entries = append(entries, entry.toPersisted())
+		}
+	}
+	d.mu.Unlock()
+
+	if len(entries) == 0 {
+		os.Remove(path)
+		return
+	}
+
+	data, err := json.Marshal(entries)
+	if err != nil {
+		logger.Warn("[dispatcher] failed to marshal command state: %v", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		logger.Warn("[dispatcher] failed to persist command state: %v", err)
+	}
+}
+
+func (d *CommandDispatcher) restoreCommands() {
+	path := d.commandStatePath()
+	if path == "" {
+		return
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	var entries []*persistedEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		logger.Warn("[dispatcher] failed to unmarshal command state: %v", err)
+		return
+	}
+
+	now := time.Now()
+	for _, pe := range entries {
+		if now.Sub(pe.CompletedAt) > 10*time.Minute {
+			continue
+		}
+		d.active[pe.CommandID] = pe.toEntry()
+	}
+
+	os.Remove(path)
 }
 
 func (d *CommandDispatcher) HandleHeartbeatCommands(cmds []device.CloudCommand) {
@@ -155,7 +295,12 @@ func (d *CommandDispatcher) execute(req *commandRequest) {
 		logger.Info("[dispatcher] command %s completed", req.CommandID)
 	}
 	entry.completedAt = time.Now()
+	needPersist := req.Type == "upgrade" && entry.status == "completed"
 	d.mu.Unlock()
+
+	if needPersist {
+		d.persistCommands()
+	}
 
 	go d.reportResult(req.CommandID, entry)
 }
@@ -190,7 +335,12 @@ func (d *CommandDispatcher) execUpgrade(req *commandRequest) (any, error) {
 		}
 	}
 
-	if err := u.Apply(context.Background(), payload.Version); err != nil {
+	commandID := req.CommandID
+	onProgress := func(phase string, progress float64, message string) {
+		d.UpdateProgress(commandID, phase, progress, message)
+	}
+
+	if err := u.ApplyWithProgress(context.Background(), payload.Version, onProgress); err != nil {
 		return nil, err
 	}
 
@@ -251,12 +401,13 @@ func (d *CommandDispatcher) reportResult(commandID string, entry *commandEntry) 
 
 func (d *CommandDispatcher) Cleanup(maxAge time.Duration) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	now := time.Now()
 	for id, entry := range d.active {
 		if entry.status != "executing" && now.Sub(entry.completedAt) > maxAge {
 			delete(d.active, id)
 		}
 	}
+	d.mu.Unlock()
+
+	d.persistCommands()
 }

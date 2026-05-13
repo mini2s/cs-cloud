@@ -39,6 +39,10 @@ func NewDownloader(tmpDir string) *Downloader {
 }
 
 func (d *Downloader) Download(ctx context.Context, url, expectedSHA256 string) (string, error) {
+	return d.DownloadWithProgress(ctx, url, expectedSHA256, nil)
+}
+
+func (d *Downloader) DownloadWithProgress(ctx context.Context, url, expectedSHA256 string, onProgress func(wrote, total int64)) (string, error) {
 	if err := os.MkdirAll(d.tmpDir, 0o755); err != nil {
 		return "", fmt.Errorf("create tmp dir: %w", err)
 	}
@@ -76,7 +80,7 @@ func (d *Downloader) Download(ctx context.Context, url, expectedSHA256 string) (
 	w := io.MultiWriter(tmpFile, hasher)
 
 	if contentLength > 0 {
-		pw := &loggingProgressWriter{src: resp.Body, total: contentLength}
+		pw := &loggingProgressWriter{src: resp.Body, total: contentLength, onProgress: onProgress}
 		if _, err := io.CopyBuffer(w, pw, make([]byte, 32*1024)); err != nil {
 			return "", fmt.Errorf("write download: %w", err)
 		}
@@ -291,10 +295,11 @@ func (d *Downloader) extractFromZip(archivePath string) (string, error) {
 }
 
 type loggingProgressWriter struct {
-	src      io.Reader
-	total    int64
-	wrote    int64
-	lastLog  time.Time
+	src        io.Reader
+	total      int64
+	wrote      int64
+	lastLog    time.Time
+	onProgress func(wrote, total int64)
 }
 
 func (pw *loggingProgressWriter) Read(b []byte) (int, error) {
@@ -305,6 +310,9 @@ func (pw *loggingProgressWriter) Read(b []byte) (int, error) {
 		pw.lastLog = now
 		pct := float64(pw.wrote) * 100 / float64(pw.total)
 		logger.Info("download progress: %.1f%% (%d/%d bytes)", pct, pw.wrote, pw.total)
+	}
+	if pw.onProgress != nil {
+		pw.onProgress(pw.wrote, pw.total)
 	}
 	return n, err
 }

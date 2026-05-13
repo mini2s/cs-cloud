@@ -69,13 +69,44 @@ func TestBuildManifest(t *testing.T) {
 	}
 }
 
-func TestBuildManifestDuplicateDetection(t *testing.T) {
+func TestBuildManifestDeduplication(t *testing.T) {
 	agent := []SlashCommand{
 		{Name: "favorites", Description: "conflict with builtin"},
 	}
-	_, err := BuildManifest([]string{ScopeShared, ScopePrompt}, agent)
-	if err == nil {
-		t.Fatal("expected error for duplicate command name")
+	manifest, err := BuildManifest([]string{ScopeShared, ScopePrompt}, agent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names := make(map[string]int)
+	for _, c := range manifest {
+		names[c.Name]++
+	}
+	if names["favorites"] != 1 {
+		t.Errorf("expected exactly 1 'favorites' command after dedup, got %d", names["favorites"])
+	}
+}
+
+func TestBuildManifestDuplicateAliasDeduplication(t *testing.T) {
+	agent := []SlashCommand{
+		{Name: "stats", Description: "Stats command"},
+		{Name: "usage", Aliases: []string{"cost", "stats"}, Description: "Usage command"},
+	}
+	manifest, err := BuildManifest([]string{ScopePrompt}, agent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	seen := make(map[string]struct{})
+	for _, c := range manifest {
+		if _, ok := seen[c.Name]; ok {
+			t.Errorf("duplicate name in manifest: %s", c.Name)
+		}
+		seen[c.Name] = struct{}{}
+		for _, a := range c.Aliases {
+			if _, ok := seen[a]; ok {
+				t.Errorf("duplicate alias in manifest: %s", a)
+			}
+			seen[a] = struct{}{}
+		}
 	}
 }
 

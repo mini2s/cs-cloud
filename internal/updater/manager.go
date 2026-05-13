@@ -21,6 +21,8 @@ const (
 	PolicyManual
 )
 
+type ProgressFunc func(phase string, progress float64, message string)
+
 type Manager struct {
 	checker      *Checker
 	downloader   *Downloader
@@ -87,6 +89,10 @@ func (m *Manager) CheckNow(ctx context.Context) (*CheckResult, error) {
 }
 
 func (m *Manager) Apply(ctx context.Context, targetVersion string) error {
+	return m.ApplyWithProgress(ctx, targetVersion, nil)
+}
+
+func (m *Manager) ApplyWithProgress(ctx context.Context, targetVersion string, onProgress ProgressFunc) error {
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
@@ -101,6 +107,10 @@ func (m *Manager) Apply(ctx context.Context, targetVersion string) error {
 		m.mu.Unlock()
 	}()
 
+	if onProgress != nil {
+		onProgress("checking", 5, "Checking for updates...")
+	}
+
 	result, err := m.checker.Check(ctx)
 	if err != nil {
 		return fmt.Errorf("check: %w", err)
@@ -112,7 +122,7 @@ func (m *Manager) Apply(ctx context.Context, targetVersion string) error {
 		return fmt.Errorf("available version %s does not match requested %s", result.Version, targetVersion)
 	}
 
-	return m.executeUpgrade(ctx, result)
+	return m.executeUpgradeWithProgress(ctx, result, onProgress)
 }
 
 func (m *Manager) Rollback() error {
@@ -192,11 +202,19 @@ func (m *Manager) doCheck(ctx context.Context) {
 }
 
 func (m *Manager) executeUpgrade(ctx context.Context, result *CheckResult) error {
+	return m.executeUpgradeWithProgress(ctx, result, nil)
+}
+
+func (m *Manager) executeUpgradeWithProgress(ctx context.Context, result *CheckResult, onProgress ProgressFunc) error {
 	logger.Info("starting upgrade to %s (force=%v)", result.Version, result.Force)
 
-	newBinary, err := m.downloadAndVerify(ctx, result)
+	newBinary, err := m.downloadAndVerifyWithProgress(ctx, result, onProgress)
 	if err != nil {
 		return err
+	}
+
+	if onProgress != nil {
+		onProgress("replacing", 90, "Installing...")
 	}
 
 	exe, err := os.Executable()
@@ -216,6 +234,10 @@ func (m *Manager) executeUpgrade(ctx context.Context, result *CheckResult) error
 		return fmt.Errorf("replace: %w", err)
 	}
 
+	if onProgress != nil {
+		onProgress("restarting", 95, "Restarting...")
+	}
+
 	logger.Info("upgrade to %s completed, requesting restart", result.Version)
 	select {
 	case m.RestartCh <- struct{}{}:
@@ -225,15 +247,38 @@ func (m *Manager) executeUpgrade(ctx context.Context, result *CheckResult) error
 }
 
 func (m *Manager) downloadAndVerify(ctx context.Context, result *CheckResult) (string, error) {
+	return m.downloadAndVerifyWithProgress(ctx, result, nil)
+}
+
+func (m *Manager) downloadAndVerifyWithProgress(ctx context.Context, result *CheckResult, onProgress ProgressFunc) (string, error) {
 	if result.DownloadURL == "" {
 		return "", fmt.Errorf("no download url in check result")
 	}
 
 	start := time.Now()
 	logger.Info("downloading %s from %s", result.Version, result.DownloadURL)
-	path, err := m.downloader.Download(ctx, result.DownloadURL, result.SHA256)
+
+	var path string
+	var err error
+	if onProgress != nil {
+		onProgress("downloading", 10, fmt.Sprintf("Downloading %s...", result.Version))
+		downloadProgress := func(wrote, total int64) {
+			if total <= 0 {
+				return
+			}
+			pct := 10 + float64(wrote)*70/float64(total)
+			onProgress("downloading", pct, fmt.Sprintf("Downloading %s...", result.Version))
+		}
+		path, err = m.downloader.DownloadWithProgress(ctx, result.DownloadURL, result.SHA256, downloadProgress)
+	} else {
+		path, err = m.downloader.Download(ctx, result.DownloadURL, result.SHA256)
+	}
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
+	}
+
+	if onProgress != nil {
+		onProgress("verifying", 85, "Verifying integrity...")
 	}
 
 	if fi, fiErr := os.Stat(path); fiErr == nil {

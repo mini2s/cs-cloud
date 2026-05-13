@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -61,22 +60,27 @@ func BuildManifest(includeScopes []string, agentCmds []SlashCommand) ([]SlashCom
 		result = append(result, c)
 	}
 
-	// validate no duplicate names or aliases
+	// deduplicate by name, first occurrence wins
 	seen := make(map[string]struct{})
+	deduped := make([]SlashCommand, 0, len(result))
 	for _, c := range result {
 		if _, ok := seen[c.Name]; ok {
-			return nil, fmt.Errorf("duplicate command name: %s", c.Name)
+			continue
 		}
 		seen[c.Name] = struct{}{}
+		// filter aliases that conflict with already-seen names
+		cleanAliases := make([]string, 0, len(c.Aliases))
 		for _, a := range c.Aliases {
-			if _, ok := seen[a]; ok {
-				return nil, fmt.Errorf("duplicate command alias: %s (command: %s)", a, c.Name)
+			if _, ok := seen[a]; !ok {
+				cleanAliases = append(cleanAliases, a)
+				seen[a] = struct{}{}
 			}
-			seen[a] = struct{}{}
 		}
+		c.Aliases = cleanAliases
+		deduped = append(deduped, c)
 	}
 
-	return result, nil
+	return deduped, nil
 }
 
 // ParseIncludeScopes parses the ?include= query parameter.

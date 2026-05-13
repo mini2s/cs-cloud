@@ -28,6 +28,9 @@ type commandStatusResponse struct {
 	CompletedAt string    `json:"completed_at,omitempty"`
 	Result      any       `json:"result,omitempty"`
 	Error       string    `json:"error,omitempty"`
+	Phase       string    `json:"phase,omitempty"`
+	Progress    float64   `json:"progress,omitempty"`
+	Message     string    `json:"message,omitempty"`
 }
 
 // @Summary      Dispatch a command
@@ -133,5 +136,13 @@ func writeCommandStatus(cmd *commandRequest, status, errMsg string, startedAt, c
 	if errMsg != "" {
 		resp.Error = errMsg
 	}
+	return resp
+}
+
+func writeCommandStatusWithProgress(cmd *commandRequest, status, errMsg string, startedAt, completedAt time.Time, result any, phase string, progress float64, message string) *commandStatusResponse {
+	resp := writeCommandStatus(cmd, status, errMsg, startedAt, completedAt, result)
+	resp.Phase = phase
+	resp.Progress = progress
+	resp.Message = message
 	return resp
 }
