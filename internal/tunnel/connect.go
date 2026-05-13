@@ -26,7 +26,7 @@ const (
 	wsConnectTimeout = 15 * time.Second
 )
 
-func Connect(ctx context.Context, localPort int, cfg *config.Config) error {
+func Connect(ctx context.Context, localPort int, cfg *config.Config, onSessionChange func(connected bool)) error {
 	attempt := 0
 	for {
 		select {
@@ -63,7 +63,7 @@ func Connect(ctx context.Context, localPort int, cfg *config.Config) error {
 			continue
 		}
 
-		err = runSession(ctx, gatewayURL, dev.DeviceID, dev.DeviceToken, localPort)
+		err = runSession(ctx, gatewayURL, dev.DeviceID, dev.DeviceToken, localPort, onSessionChange)
 		if err != nil {
 			logger.Warn("[tunnel] session error: %v", err)
 		}
@@ -79,7 +79,7 @@ func Connect(ctx context.Context, localPort int, cfg *config.Config) error {
 	}
 }
 
-func runSession(ctx context.Context, gatewayURL, deviceID, deviceToken string, localPort int) error {
+func runSession(ctx context.Context, gatewayURL, deviceID, deviceToken string, localPort int, onSessionChange func(connected bool)) error {
 	wsURL := strings.Replace(gatewayURL, "http", "ws", 1)
 	wsURL = fmt.Sprintf("%s/device/%s/tunnel?token=%s&client_version=%s", wsURL, deviceID, url.QueryEscape(deviceToken), url.QueryEscape(version.Get()))
 
@@ -95,8 +95,17 @@ func runSession(ctx context.Context, gatewayURL, deviceID, deviceToken string, l
 
 	logger.Info("[tunnel] connected, device_id=%s", deviceID)
 
+	if onSessionChange != nil {
+		onSessionChange(true)
+	}
+
 	wsNetConn := &wsNetConn{Conn: conn}
 	defer wsNetConn.Close()
+	defer func() {
+		if onSessionChange != nil {
+			onSessionChange(false)
+		}
+	}()
 
 	yamuxCfg := yamux.DefaultConfig()
 	yamuxCfg.EnableKeepAlive = true

@@ -27,7 +27,7 @@ type CloudCommand struct {
 	Timestamp string          `json:"timestamp,omitempty"`
 }
 
-func (c *Client) HeartbeatWithResponse(ctx context.Context) (*HeartbeatResponse, error) {
+func (c *Client) HeartbeatWithResponse(ctx context.Context, tunnelConnected bool) (*HeartbeatResponse, error) {
 	dev, err := LoadDevice()
 	if err != nil || dev == nil {
 		return nil, err
@@ -46,8 +46,9 @@ func (c *Client) HeartbeatWithResponse(ctx context.Context) (*HeartbeatResponse,
 	defer cancel()
 
 	body, _ := json.Marshal(map[string]any{
-		"deviceID": dev.DeviceID,
-		"version":  version.Get(),
+		"deviceID":        dev.DeviceID,
+		"version":         version.Get(),
+		"tunnelConnected": tunnelConnected,
 	})
 
 	url := c.cloud.URL(cloud.DeviceHeartbeatPath(dev.DeviceID), dev.BaseURL)
@@ -75,33 +76,47 @@ func (c *Client) HeartbeatWithResponse(ctx context.Context) (*HeartbeatResponse,
 	return &hbResp, nil
 }
 
-func HeartbeatLoop(ctx context.Context, cfg *config.Config, onCommands func([]CloudCommand)) {
+func HeartbeatLoop(ctx context.Context, cfg *config.Config, tunnelStatus func() bool, onCommands func([]CloudCommand)) func(connected bool) {
 	client := NewClient(cfg)
 	interval := 5 * time.Minute
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	if resp, err := client.HeartbeatWithResponse(ctx); err != nil {
-		logger.Warn("[heartbeat] initial failed: %v", err)
-	} else if onCommands != nil && len(resp.PendingCommands) > 0 {
-		onCommands(resp.PendingCommands)
+	send := func(connected bool) {
+		resp, err := client.HeartbeatWithResponse(ctx, connected)
+		if err != nil {
+			logger.Warn("[heartbeat] failed: %v", err)
+			return
+		}
+		if onCommands != nil && len(resp.PendingCommands) > 0 {
+			onCommands(resp.PendingCommands)
+		}
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			resp, err := client.HeartbeatWithResponse(ctx)
-			if err != nil {
-				logger.Warn("[heartbeat] failed: %v", err)
-				continue
-			}
-			if onCommands != nil && len(resp.PendingCommands) > 0 {
-				onCommands(resp.PendingCommands)
+	connected := false
+	if tunnelStatus != nil {
+		connected = tunnelStatus()
+	}
+	send(connected)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				c := false
+				if tunnelStatus != nil {
+					c = tunnelStatus()
+				}
+				send(c)
 			}
 		}
+	}()
+
+	return func(c bool) {
+		send(c)
 	}
 }
 

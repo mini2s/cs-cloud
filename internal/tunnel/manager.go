@@ -10,14 +10,21 @@ import (
 )
 
 type Manager struct {
-	mu        sync.Mutex
-	cancel    context.CancelFunc
-	localPort int
-	connected bool
+	mu            sync.Mutex
+	cancel        context.CancelFunc
+	localPort     int
+	connected     bool
+	sendHeartbeat func(connected bool)
 }
 
 func NewManager() *Manager {
 	return &Manager{}
+}
+
+func (m *Manager) SetSendHeartbeat(fn func(connected bool)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sendHeartbeat = fn
 }
 
 func (m *Manager) SetCancel(cancel context.CancelFunc) {
@@ -63,10 +70,7 @@ func RunManagedTunnel(ctx context.Context, localPort int, mgr *Manager, cfg *con
 		mgr.SetConnected(false)
 
 		logger.Info("[tunnel-manager] starting tunnel connection (port=%d)", localPort)
-		err := Connect(tunnelCtx, localPort, cfg)
-		if err != nil {
-			logger.Warn("[tunnel-manager] tunnel error: %v", err)
-		}
+		_ = Connect(tunnelCtx, localPort, cfg, mgr.sendHeartbeat)
 
 		mgr.SetConnected(false)
 

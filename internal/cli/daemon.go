@@ -75,9 +75,6 @@ func runDaemon(a *app.App) error {
 	ctx := context.Background()
 	agentType := a.Config().DefaultAgent
 	agentCommand := a.Config().AgentCommand
-	if agentType == "" {
-		agentType = "cs"
-	}
 	logger.Info("[debug] detecting agent (type=%s, command=%q)...", agentType, agentCommand)
 	if err := srv.Manager().InitDefaultAgent(ctx, agentType, agentCommand, a.Config().AgentWorkspace, a.Config().AgentEnv); err != nil {
 		logger.Error("failed to init agent: %v", err)
@@ -183,9 +180,10 @@ func runDaemon(a *app.App) error {
 		}
 		dispatcher.BindRestarter(restarter)
 
-		go device.HeartbeatLoop(cloudCtx, a.Config(), func(cmds []device.CloudCommand) {
+		triggerHeartbeat := device.HeartbeatLoop(cloudCtx, a.Config(), tunnelMgr.IsConnected, func(cmds []device.CloudCommand) {
 			dispatcher.HandleHeartbeatCommands(cmds)
 		})
+		tunnelMgr.SetSendHeartbeat(triggerHeartbeat)
 
 		go tunnel.RunManagedTunnel(cloudCtx, srv.Port(), tunnelMgr, a.Config())
 
