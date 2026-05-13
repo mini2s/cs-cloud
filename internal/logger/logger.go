@@ -112,6 +112,15 @@ func Sync() {
 	}
 }
 
+func Close() {
+	Sync()
+	if zapLogger != nil {
+		_ = zapLogger.Sync()
+		zapLogger = nil
+		sugar = nil
+	}
+}
+
 func Debug(format string, args ...any) { getSugar().Debugf(format, args...) }
 func Info(format string, args ...any)  { getSugar().Infof(format, args...) }
 func Warn(format string, args ...any)  { getSugar().Warnf(format, args...) }

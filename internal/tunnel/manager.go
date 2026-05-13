@@ -15,10 +15,13 @@ type Manager struct {
 	localPort     int
 	connected     bool
 	sendHeartbeat func(connected bool)
+	done          chan struct{}
 }
 
 func NewManager() *Manager {
-	return &Manager{}
+	return &Manager{
+		done: make(chan struct{}),
+	}
 }
 
 func (m *Manager) SetSendHeartbeat(fn func(connected bool)) {
@@ -56,7 +59,38 @@ func (m *Manager) Reconnect() {
 	}
 }
 
+func (m *Manager) Stop() {
+	m.mu.Lock()
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+		m.connected = false
+	}
+	done := m.done
+	m.mu.Unlock()
+
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			logger.Warn("[tunnel-manager] timed out waiting for tunnel to stop")
+		}
+	}
+}
+
 func RunManagedTunnel(ctx context.Context, localPort int, mgr *Manager, cfg *config.Config) {
+	defer func() {
+		if ch := func() chan struct{} {
+			mgr.mu.Lock()
+			defer mgr.mu.Unlock()
+			d := mgr.done
+			mgr.done = nil
+			return d
+		}(); ch != nil {
+			close(ch)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():

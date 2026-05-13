@@ -173,9 +173,18 @@ func runDaemon(a *app.App) error {
 
 		restarter := func() {
 			logger.Info("[daemon] self-restart triggered")
+
+			logger.Info("[daemon] stopping tunnel gracefully...")
+			tunnelMgr.Stop()
+			logger.Info("[daemon] tunnel stopped")
+
 			logger.Info("[daemon] cancelling cloud context...")
 			cloudCancel()
-			time.Sleep(2 * time.Second)
+
+			logger.Info("[daemon] stopping agent and terminals...")
+			srv.Manager().KillAll()
+			srv.TerminalManager().CloseAll()
+
 			app.SelfRestart(a)
 		}
 		dispatcher.BindRestarter(restarter)
