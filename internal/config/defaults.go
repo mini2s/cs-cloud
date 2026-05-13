@@ -2,7 +2,7 @@ package config
 
 func Default() *Config {
 	return &Config{
-		DefaultAgent: "cs",
+		DefaultAgent: "csc",
 		Runtime: RuntimeConfig{
 			AllowAbsolutePaths: true,
 			MaxListDepth:       0,

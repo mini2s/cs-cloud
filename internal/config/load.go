@@ -65,11 +65,7 @@ func Load() (*Config, error) {
 	}
 
 	if cfg.DefaultAgent == "" {
-		if platform.IsInvokedByCsc() {
-			cfg.DefaultAgent = "csc"
-		} else {
-			cfg.DefaultAgent = "cs"
-		}
+		cfg.DefaultAgent = "csc"
 	}
 
 	return cfg, nil
