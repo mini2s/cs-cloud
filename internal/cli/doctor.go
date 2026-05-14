@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -66,6 +68,7 @@ func doctor(a *app.App) error {
 		{"device registered on cloud", checkDeviceOnCloud},
 		{"device token", checkDeviceToken},
 		{"gateway", checkGateway},
+		{"tunnel", checkTunnel},
 	}
 
 	for i, c := range checks {
@@ -427,6 +430,64 @@ func checkGateway(ctx context.Context, a *app.App) *checkResult {
 		name: "gateway unreachable",
 		err:  gwErr.Error(),
 		hint: "Check your network connection and try again",
+	}
+}
+
+func checkTunnel(ctx context.Context, a *app.App) *checkResult {
+	running, _, _ := a.DaemonStatus()
+	if !running {
+		return &checkResult{name: "tunnel", ok: false, err: "daemon not running"}
+	}
+
+	serverURL, err := a.ServerURL()
+	if err != nil || serverURL == "" {
+		return &checkResult{name: "tunnel", ok: false, err: "daemon server URL not available"}
+	}
+
+	mode := a.LoadMode()
+	if mode != "cloud" {
+		return &checkResult{name: "tunnel", ok: true, detail: "not in cloud mode"}
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, serverURL+"/api/v1/runtime/health", nil)
+	if err != nil {
+		return &checkResult{name: "tunnel", ok: false, err: err.Error()}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return &checkResult{name: "tunnel", ok: false, err: fmt.Sprintf("cannot reach daemon: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var health struct {
+		Data struct {
+			Tunnel struct {
+				Connected   bool       `json:"connected"`
+				ConnectedAt *time.Time `json:"connected_at"`
+			} `json:"tunnel"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &health); err != nil {
+		return &checkResult{name: "tunnel", ok: false, err: "failed to parse health response"}
+	}
+
+	if health.Data.Tunnel.Connected {
+		detail := "connected"
+		if health.Data.Tunnel.ConnectedAt != nil {
+			detail = fmt.Sprintf("connected since %s", health.Data.Tunnel.ConnectedAt.Format(time.RFC3339))
+		}
+		return &checkResult{name: "tunnel", ok: true, detail: detail}
+	}
+
+	return &checkResult{
+		name: "tunnel",
+		err:  "tunnel not connected",
+		hint: "The device may appear offline on the cloud. Check 'logs' for tunnel connection errors.",
 	}
 }
 

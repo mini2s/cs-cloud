@@ -14,6 +14,15 @@ import (
 	"cs-cloud/internal/terminal"
 )
 
+type TunnelStatus struct {
+	Connected   bool       `json:"connected"`
+	ConnectedAt *time.Time `json:"connected_at,omitempty"`
+}
+
+type TunnelStatusProvider interface {
+	TunnelStatus() TunnelStatus
+}
+
 type PrewarmTracker interface {
 	MarkStarted(dir string)
 	MarkCompleted(dir string, err error)
@@ -47,6 +56,8 @@ type Server struct {
 	findFilesBuilds map[string]*fileSearchBuild
 
 	dispatcher *CommandDispatcher
+
+	tunnelStatus TunnelStatusProvider
 
 	prewarmMu   sync.Mutex
 	prewarmMap  map[string]*prewarmState
@@ -224,6 +235,10 @@ func (s *Server) SetDispatcher(d *CommandDispatcher) {
 
 func (s *Server) Dispatcher() *CommandDispatcher {
 	return s.dispatcher
+}
+
+func (s *Server) SetTunnelStatusProvider(p TunnelStatusProvider) {
+	s.tunnelStatus = p
 }
 
 func (s *Server) MarkStarted(dir string) {

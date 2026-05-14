@@ -14,8 +14,14 @@ type Manager struct {
 	cancel        context.CancelFunc
 	localPort     int
 	connected     bool
+	connectedAt   *time.Time
 	sendHeartbeat func(connected bool)
 	done          chan struct{}
+}
+
+type TunnelStatus struct {
+	Connected   bool       `json:"connected"`
+	ConnectedAt *time.Time `json:"connected_at,omitempty"`
 }
 
 func NewManager() *Manager {
@@ -40,12 +46,27 @@ func (m *Manager) SetConnected(v bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.connected = v
+	if v {
+		now := time.Now()
+		m.connectedAt = &now
+	} else {
+		m.connectedAt = nil
+	}
 }
 
 func (m *Manager) IsConnected() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.connected
+}
+
+func (m *Manager) Status() TunnelStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return TunnelStatus{
+		Connected:   m.connected,
+		ConnectedAt: m.connectedAt,
+	}
 }
 
 func (m *Manager) Reconnect() {
@@ -91,6 +112,16 @@ func RunManagedTunnel(ctx context.Context, localPort int, mgr *Manager, cfg *con
 		}
 	}()
 
+	onSessionChange := func(connected bool) {
+		mgr.SetConnected(connected)
+		mgr.mu.Lock()
+		fn := mgr.sendHeartbeat
+		mgr.mu.Unlock()
+		if fn != nil {
+			fn(connected)
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -104,7 +135,7 @@ func RunManagedTunnel(ctx context.Context, localPort int, mgr *Manager, cfg *con
 		mgr.SetConnected(false)
 
 		logger.Info("[tunnel-manager] starting tunnel connection (port=%d)", localPort)
-		_ = Connect(tunnelCtx, localPort, cfg, mgr.sendHeartbeat)
+		_ = Connect(tunnelCtx, localPort, cfg, onSessionChange)
 
 		mgr.SetConnected(false)
 

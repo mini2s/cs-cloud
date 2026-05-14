@@ -43,6 +43,18 @@ func collectRecent(dirs []string) []string {
 	return out
 }
 
+type tunnelStatusAdapter struct {
+	mgr *tunnel.Manager
+}
+
+func (a *tunnelStatusAdapter) TunnelStatus() localserver.TunnelStatus {
+	s := a.mgr.Status()
+	return localserver.TunnelStatus{
+		Connected:   s.Connected,
+		ConnectedAt: s.ConnectedAt,
+	}
+}
+
 func runDaemon(a *app.App) error {
 	configureDaemonSignals()
 
@@ -168,8 +180,14 @@ func runDaemon(a *app.App) error {
 		dispatcher.BindUpdater(updaterMgr)
 		go updaterMgr.Run(cloudCtx)
 
+		if updaterMgr.DidVerifyOnStartup() {
+			dispatcher.MarkUpgradeVerified()
+			logger.Info("[daemon] upgrade verified on startup, enabling grace period for stale commands")
+		}
+
 		tunnelMgr := tunnel.NewManager()
 		dispatcher.BindTunnel(tunnelMgr)
+		srv.SetTunnelStatusProvider(&tunnelStatusAdapter{mgr: tunnelMgr})
 
 		restarter := func() {
 			logger.Info("[daemon] self-restart triggered")

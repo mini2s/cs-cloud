@@ -87,20 +87,23 @@ func (pe *persistedEntry) toEntry() *commandEntry {
 const commandStateFile = "command_status.json"
 
 type CommandDispatcher struct {
-	mu        sync.Mutex
-	active    map[string]*commandEntry
-	updater   *updater.Manager
-	tunnel    reconnecter
-	restarter func()
-	reporter  *CommandReporter
-	app       *app.App
+	mu           sync.Mutex
+	active       map[string]*commandEntry
+	updater      *updater.Manager
+	tunnel       reconnecter
+	restarter    func()
+	reporter     *CommandReporter
+	app          *app.App
+	startedAt    time.Time
+	upgradeGrace bool
 }
 
 func NewCommandDispatcher(a *app.App, reporter *CommandReporter) *CommandDispatcher {
 	d := &CommandDispatcher{
-		active:   make(map[string]*commandEntry),
-		app:      a,
-		reporter: reporter,
+		active:    make(map[string]*commandEntry),
+		app:       a,
+		reporter:  reporter,
+		startedAt: time.Now(),
 	}
 	d.restoreCommands()
 	return d
@@ -132,6 +135,14 @@ func (d *CommandDispatcher) BindDeviceClient(c *device.Client) {
 	}
 }
 
+func (d *CommandDispatcher) MarkUpgradeVerified() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.upgradeGrace = true
+}
+
+const upgradeGracePeriod = 30 * time.Second
+
 func (d *CommandDispatcher) Dispatch(ctx context.Context, req *commandRequest) (*commandAck, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -144,6 +155,15 @@ func (d *CommandDispatcher) Dispatch(ctx context.Context, req *commandRequest) (
 		if entry.status == "executing" || entry.status == "accepted" {
 			return nil, fmt.Errorf("command %s is already %s", entry.req.CommandID, entry.status)
 		}
+	}
+
+	if d.upgradeGrace && (req.Type == "restart" || req.Type == "upgrade") {
+		elapsed := time.Since(d.startedAt)
+		if elapsed < upgradeGracePeriod {
+			logger.Warn("[dispatcher] rejecting stale %s command %s during upgrade grace period (elapsed=%s)", req.Type, req.CommandID, elapsed.Round(time.Millisecond))
+			return nil, fmt.Errorf("rejecting %s command during upgrade grace period", req.Type)
+		}
+		d.upgradeGrace = false
 	}
 
 	entry := &commandEntry{

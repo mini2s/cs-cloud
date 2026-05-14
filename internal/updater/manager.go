@@ -84,6 +84,21 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+func (m *Manager) DidVerifyOnStartup() bool {
+	state, err := m.replacer.LoadState()
+	if err != nil || state == nil {
+		return false
+	}
+	if state.Status != "completed" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, state.UpgradedAt)
+	if err != nil {
+		return false
+	}
+	return time.Since(t) < 2*time.Minute
+}
+
 func (m *Manager) CheckNow(ctx context.Context) (*CheckResult, error) {
 	return m.checker.Check(ctx)
 }
