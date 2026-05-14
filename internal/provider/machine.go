@@ -27,7 +27,7 @@ func GenerateMachineID() string {
 }
 
 func JSPlatform() string {
-	return runtime.GOOS
+	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
 func jsPlatform() string { return JSPlatform() }
