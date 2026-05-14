@@ -121,63 +121,67 @@ func (a *AdapterServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		path = "/health"
 	}
 
-	if r.Method == http.MethodPost && (strings.HasSuffix(path, "/prompt_async") || strings.HasSuffix(path, "/prompt")) {
-		sessionID := extractPathSegment(path, -2)
-		if sessionID != "" {
-			body, _ := io.ReadAll(r.Body)
-			r.Body.Close()
-			var parsed map[string]any
-			if json.Unmarshal(body, &parsed) == nil {
-				// Extract and store agent for this session
-				if agent, ok := parsed["agent"].(string); ok && agent != "" {
-					a.sessionAgents.Store(sessionID, agent)
-					// Inject agent part for csc to process
-					if parts, ok := parsed["parts"].([]any); ok {
-						hasAgentPart := false
-						for _, p := range parts {
-							if pm, ok := p.(map[string]any); ok {
-								if pm["type"] == "agent" {
-									hasAgentPart = true
-									break
+	if r.Method == http.MethodPost {
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+
+		if strings.HasSuffix(path, "/prompt_async") || strings.HasSuffix(path, "/prompt") {
+			sessionID := extractPathSegment(path, -2)
+			if sessionID != "" {
+				var parsed map[string]any
+				if json.Unmarshal(body, &parsed) == nil {
+					if agent, ok := parsed["agent"].(string); ok && agent != "" {
+						a.sessionAgents.Store(sessionID, agent)
+						if parts, ok := parsed["parts"].([]any); ok {
+							hasAgentPart := false
+							for _, p := range parts {
+								if pm, ok := p.(map[string]any); ok {
+									if pm["type"] == "agent" {
+										hasAgentPart = true
+										break
+									}
 								}
 							}
+							if !hasAgentPart {
+								parsed["parts"] = append(parts, map[string]any{
+									"type": "agent",
+									"name": agent,
+								})
+							}
 						}
-						if !hasAgentPart {
-							parsed["parts"] = append(parts, map[string]any{
-								"type": "agent",
-								"name": agent,
-							})
-						}
-					}
-					// Remove top-level agent field before forwarding to csc
-					delete(parsed, "agent")
-					newBody, err := json.Marshal(parsed)
-					if err == nil {
-						body = newBody
-					}
-				}
-				if parts, ok := parsed["parts"].([]any); ok {
-					var fileParts []map[string]any
-					for _, p := range parts {
-						pm, ok := p.(map[string]any)
-						if !ok {
-							continue
-						}
-						t, _ := pm["type"].(string)
-						if t == "file" {
-							fileParts = append(fileParts, pm)
+						delete(parsed, "agent")
+						newBody, err := json.Marshal(parsed)
+						if err == nil {
+							body = newBody
 						}
 					}
-					if len(fileParts) > 0 {
-						a.pendingFiles.Store(sessionID, fileParts)
+					if parts, ok := parsed["parts"].([]any); ok {
+						var fileParts []map[string]any
+						for _, p := range parts {
+							pm, ok := p.(map[string]any)
+							if !ok {
+								continue
+							}
+							t, _ := pm["type"].(string)
+							if t == "file" {
+								fileParts = append(fileParts, pm)
+							}
+						}
+						if len(fileParts) > 0 {
+							a.pendingFiles.Store(sessionID, fileParts)
+						}
 					}
 				}
 			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
-			r.Header.Set("Content-Length", strconv.Itoa(len(body)))
-			}
+		} else if len(bytes.TrimSpace(body)) == 0 {
+			body = []byte("{}")
 		}
+
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		r.Header.Set("Content-Type", "application/json")
+	}
 
 	proxy := httputil.NewSingleHostReverseProxy(a.upstream)
 	originalDirector := proxy.Director
