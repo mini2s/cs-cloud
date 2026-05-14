@@ -5,9 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+const testGatewayAssignPath = "/cloud/device/gateway-assign"
+
+func isGatewayAssignRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, testGatewayAssignPath)
+}
 
 func TestCheckGatewayConnectivity_Success(t *testing.T) {
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +28,7 @@ func TestCheckGatewayConnectivity_Success(t *testing.T) {
 	defer gatewaySrv.Close()
 
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/cloud-api/cloud/device/gateway-assign" {
+		if isGatewayAssignRequest(r) {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"gatewayURL": gatewaySrv.URL})
 			return
@@ -33,7 +40,7 @@ func TestCheckGatewayConnectivity_Success(t *testing.T) {
 	dev := &DeviceInfo{
 		DeviceID:    "test-device",
 		DeviceToken: "test-token",
-		BaseURL:     apiSrv.URL,
+		BaseURL:     apiSrv.URL + "/cloud-api",
 	}
 
 	err := CheckGatewayConnectivity(context.Background(), dev)
@@ -52,7 +59,7 @@ func TestCheckGatewayConnectivity_AssignGatewayFails(t *testing.T) {
 	dev := &DeviceInfo{
 		DeviceID:    "test-device",
 		DeviceToken: "test-token",
-		BaseURL:     apiSrv.URL,
+		BaseURL:     apiSrv.URL + "/cloud-api",
 	}
 
 	err := CheckGatewayConnectivity(context.Background(), dev)
@@ -63,7 +70,7 @@ func TestCheckGatewayConnectivity_AssignGatewayFails(t *testing.T) {
 
 func TestCheckGatewayConnectivity_GatewayUnreachable(t *testing.T) {
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/cloud-api/cloud/device/gateway-assign" {
+		if isGatewayAssignRequest(r) {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"gatewayURL": "http://127.0.0.1:1"})
 			return
@@ -75,7 +82,7 @@ func TestCheckGatewayConnectivity_GatewayUnreachable(t *testing.T) {
 	dev := &DeviceInfo{
 		DeviceID:    "test-device",
 		DeviceToken: "test-token",
-		BaseURL:     apiSrv.URL,
+		BaseURL:     apiSrv.URL + "/cloud-api",
 	}
 
 	err := CheckGatewayConnectivity(context.Background(), dev)
@@ -91,7 +98,7 @@ func TestCheckGatewayConnectivity_GatewayReturns500(t *testing.T) {
 	defer gatewaySrv.Close()
 
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/cloud-api/cloud/device/gateway-assign" {
+		if isGatewayAssignRequest(r) {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"gatewayURL": gatewaySrv.URL})
 			return
@@ -103,7 +110,7 @@ func TestCheckGatewayConnectivity_GatewayReturns500(t *testing.T) {
 	dev := &DeviceInfo{
 		DeviceID:    "test-device",
 		DeviceToken: "test-token",
-		BaseURL:     apiSrv.URL,
+		BaseURL:     apiSrv.URL + "/cloud-api",
 	}
 
 	err := CheckGatewayConnectivity(context.Background(), dev)
@@ -133,7 +140,7 @@ func TestCheckGatewayConnectivity_AuthHeadersSent(t *testing.T) {
 	dev := &DeviceInfo{
 		DeviceID:    "test-device",
 		DeviceToken: "my-secret-token",
-		BaseURL:     apiSrv.URL,
+		BaseURL:     apiSrv.URL + "/cloud-api",
 	}
 
 	err := CheckGatewayConnectivity(context.Background(), dev)
@@ -160,7 +167,7 @@ func TestCheckGatewayConnectivity_ContextCancelled(t *testing.T) {
 	dev := &DeviceInfo{
 		DeviceID:    "test-device",
 		DeviceToken: "test-token",
-		BaseURL:     apiSrv.URL,
+		BaseURL:     apiSrv.URL + "/cloud-api",
 	}
 
 	err := CheckGatewayConnectivity(ctx, dev)

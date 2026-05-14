@@ -6,9 +6,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"cs-cloud/internal/platform"
+	"cs-cloud/internal/provider"
 )
+
+var (
+	cachedDeviceID     string
+	cachedDeviceIDOnce sync.Once
+)
+
+func GetDeviceID() string {
+	cachedDeviceIDOnce.Do(func() {
+		cachedDeviceID = provider.GenerateMachineID()
+	})
+	return cachedDeviceID
+}
 
 type DeviceInfo struct {
 	DeviceID     string `json:"device_id"`
@@ -38,13 +52,17 @@ func LoadDevice() (*DeviceInfo, error) {
 	if err := json.Unmarshal(b, &info); err != nil {
 		return nil, fmt.Errorf("decode device file: %w", err)
 	}
-	if info.DeviceID == "" || info.DeviceToken == "" {
+	if info.DeviceToken == "" {
 		return nil, nil
 	}
+	info.DeviceID = GetDeviceID()
 	return &info, nil
 }
 
 func SaveDevice(info *DeviceInfo) error {
+	if info != nil {
+		info.DeviceID = GetDeviceID()
+	}
 	p, err := DevicePath()
 	if err != nil {
 		return err

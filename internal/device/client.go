@@ -59,7 +59,7 @@ func (c *Client) Register(ctx context.Context) (*DeviceInfo, error) {
 	}
 
 	base := c.cloud.CloudBaseURL(creds.BaseURL)
-	deviceID := creds.MachineID
+	deviceID := GetDeviceID()
 
 	info, err := enroll(ctx, c.cloud, creds, base, deviceID)
 	if err != nil {
@@ -170,7 +170,7 @@ func enroll(ctx context.Context, cc *cloud.Client, creds *provider.Credentials, 
 		return nil, err
 	}
 	info := &DeviceInfo{
-		DeviceID:     out.Device.DeviceID,
+		DeviceID:     deviceID,
 		DeviceToken:  out.Token,
 		AuthUserID:   creds.ID,
 		RegisteredAt: time.Now().Format(time.RFC3339),
@@ -189,7 +189,7 @@ func handleConflict(resp *http.Response, base, authUserID string) (*DeviceInfo, 
 	}
 	if conflict.Token != "" && conflict.Device != nil && conflict.Device.DeviceID != "" {
 		info := &DeviceInfo{
-			DeviceID:     conflict.Device.DeviceID,
+			DeviceID:     GetDeviceID(),
 			DeviceToken:  conflict.Token,
 			AuthUserID:   authUserID,
 			RegisteredAt: time.Now().Format(time.RFC3339),
