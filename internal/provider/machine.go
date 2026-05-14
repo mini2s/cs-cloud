@@ -27,7 +27,12 @@ func GenerateMachineID() string {
 }
 
 func JSPlatform() string {
-	return runtime.GOOS + "-" + runtime.GOARCH
+	switch runtime.GOOS {
+	case "windows":
+		return "win32"
+	default:
+		return runtime.GOOS
+	}
 }
 
 func jsPlatform() string { return JSPlatform() }
