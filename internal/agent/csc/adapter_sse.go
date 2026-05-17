@@ -128,6 +128,7 @@ func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, 
 
 	case "session.deleted":
 		normalizeSession(payload)
+		a.cleanupPendingForSession(sessionID)
 		return []sseFrame{frame("session.deleted", map[string]any{
 			"sessionID": sessionID,
 			"info":      payload,
@@ -143,10 +144,11 @@ func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, 
 		return adaptResultEvent(sessionID, payload, ss)
 
 	case "session.control_request":
-		return adaptControlRequestEvent(sessionID, payload)
+		return a.adaptControlRequestEvent(sessionID, payload)
 
 	case "session.permission_replied":
 		requestID, _ := adapterString(payload["request_id"])
+		a.pendingPerms.Delete(requestID)
 		return []sseFrame{frame("permission.replied", map[string]any{
 			"sessionID": sessionID,
 			"requestID": requestID,
@@ -154,6 +156,7 @@ func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, 
 
 	case "session.question_replied":
 		requestID, _ := adapterString(payload["request_id"])
+		a.pendingQs.Delete(requestID)
 		return []sseFrame{frame("question.replied", map[string]any{
 			"sessionID": sessionID,
 			"requestID": requestID,
@@ -282,7 +285,7 @@ func adaptResultEvent(sessionID string, payload map[string]any, ss *streamingSta
 	return frames
 }
 
-func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFrame {
+func (a *AdapterServer) adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFrame {
 	request, _ := payload["request"].(map[string]any)
 	requestID, _ := adapterString(payload["request_id"])
 	if request == nil {
@@ -300,7 +303,7 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 		}
 		patterns := extractPatterns(toolName, input)
 		permissionKey := toPermissionKey(toolName)
-		return []sseFrame{frame("permission.asked", map[string]any{
+		perm := map[string]any{
 			"id":         requestID,
 			"sessionID":  sessionID,
 			"permission": permissionKey,
@@ -311,7 +314,13 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 				"messageID": "",
 				"callID":    toolUseID,
 			},
-		})}
+		}
+		a.pendingPerms.Store(requestID, &pendingEntry{
+			sessionID: sessionID,
+			createdAt: time.Now(),
+			data:      perm,
+		})
+		return []sseFrame{frame("permission.asked", perm)}
 
 	case "elicitation":
 		message, _ := request["message"].(string)
@@ -320,7 +329,7 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 		if schema == nil {
 			schema = map[string]any{}
 		}
-		return []sseFrame{frame("question.asked", map[string]any{
+		q := map[string]any{
 			"id":        requestID,
 			"sessionID": sessionID,
 			"questions": []map[string]any{
@@ -333,7 +342,13 @@ func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFra
 				},
 			},
 			"tool": nil,
-		})}
+		}
+		a.pendingQs.Store(requestID, &pendingEntry{
+			sessionID: sessionID,
+			createdAt: time.Now(),
+			data:      q,
+		})
+		return []sseFrame{frame("question.asked", q)}
 
 	default:
 		return []sseFrame{frame("session.control_request", map[string]any{

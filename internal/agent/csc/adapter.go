@@ -13,7 +13,21 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
+
+// pendingTTL defines how long a pending permission/question entry lives without
+// receiving a corresponding reply event. This prevents memory leaks when the
+// CSC backend never emits session.permission_replied / session.question_replied
+// (e.g. due to dropped SSE connection or "always allow" optimisations).
+const pendingTTL = 5 * time.Minute
+
+// pendingEntry wraps the payload with metadata for TTL-based lazy cleanup.
+type pendingEntry struct {
+	sessionID string
+	createdAt time.Time
+	data      map[string]any
+}
 
 type AdapterServer struct {
 	upstream      *url.URL
@@ -25,6 +39,15 @@ type AdapterServer struct {
 	pendingFiles  sync.Map
 	sessionModels sync.Map // sessionID -> {modelID, providerID}
 	sessionAgents sync.Map // sessionID -> agentName
+
+	// In-memory tracking of pending permission/question requests
+	// so GET /permission and GET /question return correct data even
+	// when the raw CSC backend does not expose these endpoints.
+	// Values are *pendingEntry; entries are lazily evicted after pendingTTL
+	// on read, and eagerly deleted on session.permission_replied /
+	// session.question_replied / session.deleted.
+	pendingPerms    sync.Map // requestID -> *pendingEntry
+	pendingQs       sync.Map // requestID -> *pendingEntry
 }
 
 type sseFrame struct {
@@ -79,6 +102,8 @@ func NewAdapterServer(rawEndpoint string) (*AdapterServer, error) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
+	mux.HandleFunc("/permission", a.handlePermissionList)
+	mux.HandleFunc("/question", a.handleQuestionList)
 	mux.HandleFunc("/", a.handleProxy)
 
 	a.http = &http.Server{Handler: mux}
@@ -233,4 +258,89 @@ func frame(typeName string, properties map[string]any) sseFrame {
 		return sseFrame{data: `{"type":"","properties":null}`}
 	}
 	return sseFrame{data: string(encoded)}
+}
+
+// handlePermissionList returns in-memory tracked pending permissions.
+// This avoids depending on the raw CSC backend exposing a GET /permission
+// endpoint which may not exist or return data in a different format.
+// Returns a flat JSON array to match the opencode SDK expected format
+// where response.data is PermissionRequest[].
+// Performs lazy eviction: entries older than pendingTTL are removed.
+func (a *AdapterServer) handlePermissionList(w http.ResponseWriter, _ *http.Request) {
+	var permissions []map[string]any
+	var expired []string
+	now := time.Now()
+	a.pendingPerms.Range(func(key, value any) bool {
+		entry, ok := value.(*pendingEntry)
+		if !ok {
+			expired = append(expired, key.(string))
+			return true
+		}
+		if now.After(entry.createdAt.Add(pendingTTL)) {
+			expired = append(expired, key.(string))
+			return true
+		}
+		permissions = append(permissions, entry.data)
+		return true
+	})
+	for _, k := range expired {
+		a.pendingPerms.Delete(k)
+	}
+	if permissions == nil {
+		permissions = []map[string]any{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	out, _ := json.Marshal(permissions)
+	_, _ = w.Write(out)
+}
+
+// handleQuestionList returns in-memory tracked pending questions.
+// Returns a flat JSON array to match the opencode SDK expected format
+// where response.data is QuestionRequest[].
+// Performs lazy eviction: entries older than pendingTTL are removed.
+func (a *AdapterServer) handleQuestionList(w http.ResponseWriter, _ *http.Request) {
+	var questions []map[string]any
+	var expired []string
+	now := time.Now()
+	a.pendingQs.Range(func(key, value any) bool {
+		entry, ok := value.(*pendingEntry)
+		if !ok {
+			expired = append(expired, key.(string))
+			return true
+		}
+		if now.After(entry.createdAt.Add(pendingTTL)) {
+			expired = append(expired, key.(string))
+			return true
+		}
+		questions = append(questions, entry.data)
+		return true
+	})
+	for _, k := range expired {
+		a.pendingQs.Delete(k)
+	}
+	if questions == nil {
+		questions = []map[string]any{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	out, _ := json.Marshal(questions)
+	_, _ = w.Write(out)
+}
+
+// cleanupPendingForSession removes all pending permission and question entries
+// that belong to the given session ID. Called when a session is deleted.
+func (a *AdapterServer) cleanupPendingForSession(sessionID string) {
+	clean := func(m *sync.Map) {
+		var keys []string
+		m.Range(func(key, value any) bool {
+			if entry, ok := value.(*pendingEntry); ok && entry.sessionID == sessionID {
+				keys = append(keys, key.(string))
+			}
+			return true
+		})
+		for _, k := range keys {
+			m.Delete(k)
+		}
+	}
+	clean(&a.pendingPerms)
+	clean(&a.pendingQs)
 }
