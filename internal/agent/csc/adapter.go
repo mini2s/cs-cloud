@@ -271,13 +271,17 @@ func (a *AdapterServer) handlePermissionList(w http.ResponseWriter, _ *http.Requ
 	var expired []string
 	now := time.Now()
 	a.pendingPerms.Range(func(key, value any) bool {
+		keyStr, ok := key.(string)
+		if !ok {
+			return true
+		}
 		entry, ok := value.(*pendingEntry)
 		if !ok {
-			expired = append(expired, key.(string))
+			expired = append(expired, keyStr)
 			return true
 		}
 		if now.After(entry.createdAt.Add(pendingTTL)) {
-			expired = append(expired, key.(string))
+			expired = append(expired, keyStr)
 			return true
 		}
 		permissions = append(permissions, entry.data)
@@ -303,13 +307,17 @@ func (a *AdapterServer) handleQuestionList(w http.ResponseWriter, _ *http.Reques
 	var expired []string
 	now := time.Now()
 	a.pendingQs.Range(func(key, value any) bool {
+		keyStr, ok := key.(string)
+		if !ok {
+			return true
+		}
 		entry, ok := value.(*pendingEntry)
 		if !ok {
-			expired = append(expired, key.(string))
+			expired = append(expired, keyStr)
 			return true
 		}
 		if now.After(entry.createdAt.Add(pendingTTL)) {
-			expired = append(expired, key.(string))
+			expired = append(expired, keyStr)
 			return true
 		}
 		questions = append(questions, entry.data)
@@ -332,8 +340,12 @@ func (a *AdapterServer) cleanupPendingForSession(sessionID string) {
 	clean := func(m *sync.Map) {
 		var keys []string
 		m.Range(func(key, value any) bool {
+			keyStr, ok := key.(string)
+			if !ok {
+				return true
+			}
 			if entry, ok := value.(*pendingEntry); ok && entry.sessionID == sessionID {
-				keys = append(keys, key.(string))
+				keys = append(keys, keyStr)
 			}
 			return true
 		})

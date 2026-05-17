@@ -2,9 +2,11 @@ package csc
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -148,6 +150,9 @@ func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, 
 
 	case "session.permission_replied":
 		requestID, _ := adapterString(payload["request_id"])
+		if requestID == "" {
+			return nil
+		}
 		a.pendingPerms.Delete(requestID)
 		return []sseFrame{frame("permission.replied", map[string]any{
 			"sessionID": sessionID,
@@ -156,6 +161,9 @@ func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, 
 
 	case "session.question_replied":
 		requestID, _ := adapterString(payload["request_id"])
+		if requestID == "" {
+			return nil
+		}
 		a.pendingQs.Delete(requestID)
 		return []sseFrame{frame("question.replied", map[string]any{
 			"sessionID": sessionID,
@@ -291,6 +299,13 @@ func (a *AdapterServer) adaptControlRequestEvent(sessionID string, payload map[s
 	if request == nil {
 		request = map[string]any{}
 	}
+	if requestID == "" {
+		return []sseFrame{frame("session.control_request", map[string]any{
+			"sessionID": sessionID,
+			"requestID": requestID,
+			"request":   request,
+		})}
+	}
 	subtype, _ := request["subtype"].(string)
 
 	switch subtype {
@@ -300,6 +315,44 @@ func (a *AdapterServer) adaptControlRequestEvent(sessionID string, payload map[s
 		input := request["input"]
 		if input == nil {
 			input = map[string]any{}
+		}
+
+		// Tools that do not require user approval — auto-approve by
+		// sending a reply directly to the raw CSC backend, without
+		// surfacing a permission.asked event to the frontend.
+		noApprovalTools := map[string]bool{
+			"AskUserQuestion":    true,
+			"ask_question":      true,
+			"request_user_input": true,
+			"requestUserInput":  true,
+		}
+		if noApprovalTools[toolName] {
+			go a.autoApprovePermission(toolUseID)
+
+			// For question-type tools, extract questions from input,
+			// store in pendingQs and emit question.asked so the
+			// frontend renders the question card and can recover on refresh.
+			if inputMap, ok := input.(map[string]any); ok {
+				if questionsRaw, qOk := inputMap["questions"]; qOk {
+					q := map[string]any{
+						"id":        requestID,
+						"sessionID": sessionID,
+						"questions": questionsRaw,
+						"tool": map[string]any{
+							"callID":    toolUseID,
+							"messageID": "",
+						},
+					}
+					a.pendingQs.Store(requestID, &pendingEntry{
+						sessionID: sessionID,
+						createdAt: time.Now(),
+						data:      q,
+					})
+					return []sseFrame{frame("question.asked", q)}
+				}
+			}
+
+			return []sseFrame{}
 		}
 		patterns := extractPatterns(toolName, input)
 		permissionKey := toPermissionKey(toolName)
@@ -357,6 +410,26 @@ func (a *AdapterServer) adaptControlRequestEvent(sessionID string, payload map[s
 			"request":   request,
 		})}
 	}
+}
+
+// autoApprovePermission sends an automatic allow reply to the raw CSC
+// backend for tools that don't require user approval.
+func (a *AdapterServer) autoApprovePermission(toolUseID string) {
+	if a.upstream == nil || toolUseID == "" {
+		return
+	}
+	url := a.upstream.String() + "/permission/" + toolUseID + "/reply"
+	body, _ := json.Marshal(map[string]any{"behavior": "allow"})
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 func extractPatterns(toolName string, input any) []string {
