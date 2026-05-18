@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"cs-cloud/internal/config"
+	"cs-cloud/internal/filewatcher"
+	"cs-cloud/internal/gitwatcher"
 	"cs-cloud/internal/logger"
 	"cs-cloud/internal/runtime"
 	"cs-cloud/internal/terminal"
@@ -61,6 +63,10 @@ type Server struct {
 
 	prewarmMu   sync.Mutex
 	prewarmMap  map[string]*prewarmState
+
+	// Host event watchers
+	fileWatcher *filewatcher.Watcher
+	gitWatcher  *gitwatcher.Watcher
 }
 
 func New(opts ...Option) *Server {
@@ -75,6 +81,10 @@ func New(opts ...Option) *Server {
 		o(s)
 	}
 	s.manager = runtime.NewAgentManager(s.eventBus)
+
+	// Initialize host event watchers
+	s.fileWatcher = filewatcher.New(s.eventBus)
+	s.gitWatcher = gitwatcher.New(s.eventBus)
 
 	s.termMgr = terminal.NewManager(terminal.WithConfig(s.cfg))
 	s.termH = terminal.NewHandlers(s.termMgr)
@@ -202,6 +212,20 @@ func (s *Server) Start(addr string) error {
 	}
 	s.ln = ln
 	s.url = "http://" + ln.Addr().String()
+
+	// Start host event watchers
+	ctx := context.Background()
+	if s.fileWatcher != nil {
+		if err := s.fileWatcher.Start(ctx); err != nil {
+			logger.Error("Failed to start file watcher: %v", err)
+		}
+	}
+	if s.gitWatcher != nil {
+		if err := s.gitWatcher.Start(ctx, s.fileWatcher); err != nil {
+			logger.Error("Failed to start git watcher: %v", err)
+		}
+	}
+
 	go func() {
 		_ = s.http.Serve(ln)
 	}()
@@ -220,6 +244,14 @@ func (s *Server) Port() int {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	// Stop host event watchers
+	if s.gitWatcher != nil {
+		s.gitWatcher.Stop()
+	}
+	if s.fileWatcher != nil {
+		s.fileWatcher.Stop()
+	}
+
 	s.manager.KillAll()
 	s.termMgr.CloseAll()
 	return s.http.Shutdown(ctx)
@@ -380,4 +412,52 @@ func (s *Server) AllPrewarmStates() map[string]*prewarmState {
 		out[dir] = &cp
 	}
 	return out
+}
+
+// WatchDirectory starts watching a directory for file system changes
+func (s *Server) WatchDirectory(dir string) error {
+	if s.fileWatcher == nil {
+		return fmt.Errorf("file watcher not initialized")
+	}
+	return s.fileWatcher.AddDirectory(dir)
+}
+
+// UnwatchDirectory stops watching a directory
+func (s *Server) UnwatchDirectory(dir string) error {
+	if s.fileWatcher == nil {
+		return fmt.Errorf("file watcher not initialized")
+	}
+	return s.fileWatcher.RemoveDirectory(dir)
+}
+
+// WatchGitRepo starts watching a git repository
+func (s *Server) WatchGitRepo(repoPath string) error {
+	if s.gitWatcher == nil {
+		return fmt.Errorf("git watcher not initialized")
+	}
+	return s.gitWatcher.AddRepository(repoPath)
+}
+
+// UnwatchGitRepo stops watching a git repository
+func (s *Server) UnwatchGitRepo(repoPath string) error {
+	if s.gitWatcher == nil {
+		return fmt.Errorf("git watcher not initialized")
+	}
+	return s.gitWatcher.RemoveRepository(repoPath)
+}
+
+// WatchingDirectories returns the list of directories being watched
+func (s *Server) WatchingDirectories() []string {
+	if s.fileWatcher == nil {
+		return nil
+	}
+	return s.fileWatcher.WatchingDirectories()
+}
+
+// WatchingGitRepos returns the list of git repositories being watched
+func (s *Server) WatchingGitRepos() []string {
+	if s.gitWatcher == nil {
+		return nil
+	}
+	return s.gitWatcher.WatchingRepositories()
 }
