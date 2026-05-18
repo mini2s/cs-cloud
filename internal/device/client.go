@@ -60,15 +60,16 @@ func (c *Client) Register(ctx context.Context) (*DeviceInfo, error) {
 
 	base := c.cloud.CloudBaseURL(creds.BaseURL)
 	deviceID := GetDeviceID()
+	legacyDeviceID := GetLegacyDeviceID()
 
-	info, err := enroll(ctx, c.cloud, creds, base, deviceID)
+	info, err := enroll(ctx, c.cloud, creds, base, deviceID, legacyDeviceID)
 	if err != nil {
 		if IsAuthError(err) && creds.RefreshToken != "" {
 			creds, err = renew(ctx, c.cloud, creds)
 			if err != nil {
 				return nil, err
 			}
-			info, err = enroll(ctx, c.cloud, creds, base, deviceID)
+			info, err = enroll(ctx, c.cloud, creds, base, deviceID, legacyDeviceID)
 		}
 	}
 	if err != nil {
@@ -126,12 +127,13 @@ func renew(ctx context.Context, cc *cloud.Client, creds *provider.Credentials) (
 	return fresh, nil
 }
 
-func enroll(ctx context.Context, cc *cloud.Client, creds *provider.Credentials, base, deviceID string) (*DeviceInfo, error) {
+func enroll(ctx context.Context, cc *cloud.Client, creds *provider.Credentials, base, deviceID, legacyDeviceID string) (*DeviceInfo, error) {
 	reqBody := registerRequest{
-		DeviceID:    deviceID,
-		DisplayName: hostname(),
-		Platform:    runtime.GOOS + "-" + runtime.GOARCH,
-		Version:     version.Get(),
+		DeviceID:       deviceID,
+		LegacyDeviceID: legacyDeviceID,
+		DisplayName:    hostname(),
+		Platform:       runtime.GOOS + "-" + runtime.GOARCH,
+		Version:        version.Get(),
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -258,10 +260,11 @@ func containsStr(s, sub string) bool {
 }
 
 type registerRequest struct {
-	DeviceID    string `json:"deviceId"`
-	DisplayName string `json:"displayName"`
-	Platform    string `json:"platform"`
-	Version     string `json:"version"`
+	DeviceID       string `json:"deviceId"`
+	LegacyDeviceID string `json:"legacyDeviceId"`
+	DisplayName    string `json:"displayName"`
+	Platform       string `json:"platform"`
+	Version        string `json:"version"`
 }
 
 type registerResponse struct {

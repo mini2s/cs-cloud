@@ -13,8 +13,10 @@ import (
 )
 
 var (
-	cachedDeviceID     string
-	cachedDeviceIDOnce sync.Once
+	cachedDeviceID        string
+	cachedDeviceIDOnce    sync.Once
+	cachedLegacyDeviceID  string
+	cachedLegacyOnce      sync.Once
 )
 
 func GetDeviceID() string {
@@ -22,6 +24,13 @@ func GetDeviceID() string {
 		cachedDeviceID = provider.GenerateMachineID()
 	})
 	return cachedDeviceID
+}
+
+func GetLegacyDeviceID() string {
+	cachedLegacyOnce.Do(func() {
+		cachedLegacyDeviceID = provider.GenerateLegacyMachineID()
+	})
+	return cachedLegacyDeviceID
 }
 
 type DeviceInfo struct {
