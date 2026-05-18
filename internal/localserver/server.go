@@ -141,6 +141,7 @@ func New(opts ...Option) *Server {
 	api.HandleFunc("POST /conversations/{id}/abort", s.handleConversationAbort)
 	api.HandleFunc("GET /conversations/{id}/messages", s.handleConversationMessages)
 	api.HandleFunc("GET /conversations/{id}/todo", s.handleConversationTodo)
+	api.HandleFunc("GET /conversations/{id}/tasks", s.handleConversationTasks)
 	api.HandleFunc("GET /conversations/{id}/diff", s.handleConversationDiffDeprecated)
 	api.HandleFunc("POST /conversations/{id}/shell", s.handleConversationShell)
 	api.HandleFunc("POST /conversations/{id}/command", s.handleConversationCommand)

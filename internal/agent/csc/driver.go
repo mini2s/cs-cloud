@@ -92,6 +92,7 @@ func (d *Driver) ProxyRoutes() []agent.ProxyRoute {
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/abort", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/abort")},
 		{Method: http.MethodGet, Prefix: "/conversations/{id}/messages", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/message")},
 		{Method: http.MethodGet, Prefix: "/conversations/{id}/todo", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/todo")},
+		{Method: http.MethodGet, Prefix: "/conversations/{id}/tasks", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/tasks")},
 		{Method: http.MethodGet, Prefix: "/conversations/{id}/diff", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/diff")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/shell", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/shell")},
 		{Method: http.MethodPost, Prefix: "/conversations/{id}/command", Rewrite: agent.RewriteSessionIDWithSuffix("/session/", "/command")},

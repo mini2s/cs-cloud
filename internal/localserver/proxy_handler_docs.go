@@ -137,6 +137,18 @@ func (s *Server) handleConversationTodo(w http.ResponseWriter, r *http.Request) 
 	s.handleProxy(w, r)
 }
 
+// @Summary      Get conversation tasks
+// @Description  Proxies to the agent backend to retrieve task history for a conversation.
+// @Tags         Conversation
+// @Produce      json
+// @Param        id   path      string  true  "Conversation ID"
+// @Success      200  {object}  envelope{data=map[string]any}
+// @Failure      503  {object}  envelope
+// @Router       /conversations/{id}/tasks [get]
+func (s *Server) handleConversationTasks(w http.ResponseWriter, r *http.Request) {
+	s.handleProxy(w, r)
+}
+
 // @Summary      Execute shell command
 // @Description  Proxies to the agent backend to execute a shell command in a conversation.
 // @Tags         Conversation

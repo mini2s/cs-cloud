@@ -59,7 +59,7 @@ func (a *AdapterServer) adaptJSON(path string, body []byte) ([]byte, bool, error
 			out, err := json.Marshal(payload)
 			return out, err == nil, err
 		}
-	case strings.HasPrefix(path, "/session/") && !strings.HasSuffix(path, "/message") && !strings.HasSuffix(path, "/todo") && !strings.HasSuffix(path, "/diff"):
+	case strings.HasPrefix(path, "/session/") && !strings.HasSuffix(path, "/message") && !strings.HasSuffix(path, "/todo") && !strings.HasSuffix(path, "/tasks") && !strings.HasSuffix(path, "/diff"):
 		var payload map[string]any
 		if err := json.Unmarshal(trimmed, &payload); err == nil {
 			normalizeSession(payload)
@@ -198,7 +198,9 @@ case strings.HasSuffix(path, "/message"):
 					}
 				}
 				if len(parts) == 0 {
-					continue
+					if _, hasErr := msg["error"]; !hasErr {
+						continue
+					}
 				}
 				result = append(result, map[string]any{
 					"info":  msg,
