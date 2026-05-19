@@ -101,13 +101,7 @@ func doctor(a *app.App) error {
 		return nil
 	}
 
-	fmt.Print(headingStyle.Render(fmt.Sprintf("Apply %d fix(es)?", len(fixables))) + " [y/N] ")
-	var answer string
-	fmt.Scanln(&answer)
-	if answer != "y" && answer != "Y" {
-		printInfo("Skipped. Run 'doctor' again to retry.")
-		return nil
-	}
+	printInfo("Applying %d fix(es)...", len(fixables))
 
 	fmt.Println()
 	applied := 0

@@ -64,13 +64,8 @@ func login(a *app.App) error {
 	}
 
 	fmt.Println()
-	fmt.Print(headingStyle.Render("Start cs-cloud now?") + " [Y/n] ")
-	var answer string
-	fmt.Scanln(&answer)
-	if answer == "" || answer == "y" || answer == "Y" {
-		return start(a)
-	}
-	return nil
+	printInfo("Starting cs-cloud...")
+	return start(a)
 }
 
 func logout(a *app.App) error {
