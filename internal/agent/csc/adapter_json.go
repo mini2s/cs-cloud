@@ -169,7 +169,17 @@ case strings.HasSuffix(path, "/message"):
 				}
 				normalizeMessage(msg, a.getSessionAgent(sessionID))
 				role, _ := adapterString(msg["role"])
-				parts := buildMessageParts(msg, toolUseParts)
+				var parts []map[string]any
+				if existingParts, ok := msg["parts"].([]any); ok && len(existingParts) > 0 {
+					for _, p := range existingParts {
+						if pm, ok := p.(map[string]any); ok {
+							parts = append(parts, pm)
+						}
+					}
+					delete(msg, "parts")
+				} else {
+					parts = buildMessageParts(msg, toolUseParts)
+				}
 				if role == "user" && len(parts) == 0 {
 					continue
 				}

@@ -101,6 +101,15 @@ func (a *AdapterServer) adaptEventPayload(eventName, joined string, ss *streamin
 func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, ss *streamingState) []sseFrame {
 	sessionID := extractSessionID(payload)
 
+	if native, _ := payload["_native_opencode"].(bool); native {
+		delete(payload, "_native_opencode")
+		props := map[string]any{}
+		for k, v := range payload {
+			props[k] = v
+		}
+		return []sseFrame{frame(eventName, props)}
+	}
+
 	// Update agent from stored session agent
 	if sessionID != "" {
 		if agent := a.getSessionAgent(sessionID); agent != "" {

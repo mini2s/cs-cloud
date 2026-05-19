@@ -128,15 +128,15 @@ func buildMessageParts(msg map[string]any, toolUseParts map[string]map[string]an
 						metadata["filediff"] = filediff
 					}
 				}
-				toolTime := extractMessageTime(msg)
-				state := map[string]any{
-					"status":   "completed",
-					"input":    inputMap,
-					"title":    title,
-					"metadata": metadata,
-					"time":     map[string]any{"start": toolTime, "end": toolTime},
-				}
-				part := makePart(fmt.Sprintf("tool-%d", i), map[string]any{
+			toolTime := extractMessageTime(msg)
+			state := map[string]any{
+				"status":   "completed",
+				"input":    inputMap,
+				"title":    title,
+				"metadata": metadata,
+				"time":     map[string]any{"start": toolTime, "end": toolTime},
+			}
+			part := makePart(fmt.Sprintf("tool-%d", i), map[string]any{
 					"type":   "tool",
 					"callID": toolID,
 					"tool":   toolName,
