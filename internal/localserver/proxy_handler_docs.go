@@ -189,17 +189,7 @@ func (s *Server) handleConversationCommandAsync(w http.ResponseWriter, r *http.R
 }
 
 // --- Events ---
-
-// @Summary      Subscribe to events
-// @Description  Proxies to the agent backend SSE endpoint for real-time events.
-// @Tags         Events
-// @Produce      text/event-stream
-// @Success      200  {string}  string  "SSE stream"
-// @Failure      503  {object}  envelope
-// @Router       /events [get]
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	s.handleProxy(w, r)
-}
+// handleEvents is implemented in handle_events.go (merged SSE: backend proxy + host events)
 
 // --- Permissions ---
 
