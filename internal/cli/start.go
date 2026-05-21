@@ -108,6 +108,11 @@ func start(a *app.App) error {
 	if port > 0 {
 		daemonArgs = append(daemonArgs, "--port", fmt.Sprintf("%d", port))
 	}
+	h, err := parseHost()
+	if err != nil {
+		return err
+	}
+	daemonArgs = append(daemonArgs, "--host", h)
 	if platform.NoAutoUpgrade() {
 		daemonArgs = append(daemonArgs, "--no-auto-upgrade")
 	}

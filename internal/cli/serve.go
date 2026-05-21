@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,10 @@ func serve(a *app.App) error {
 	if err != nil {
 		return err
 	}
+	host, err := parseHost()
+	if err != nil {
+		return err
+	}
 
 	srv := localserver.New(localserver.WithVersion(version.Get()), localserver.WithConfig(a.Config()), localserver.WithRootDir(a.RootDir()))
 
@@ -29,7 +34,7 @@ func serve(a *app.App) error {
 	}
 	printSuccess("Agent started (endpoint=%s)", srv.Manager().Endpoint())
 
-	if err := srv.Start(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+	if err := srv.Start(net.JoinHostPort(host, fmt.Sprintf("%d", port))); err != nil {
 		return err
 	}
 	if err := a.SaveServerURL(srv.URL()); err != nil {

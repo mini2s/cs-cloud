@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -60,6 +61,9 @@ func commandArgs() []string {
 			i++
 		case strings.HasPrefix(args[i], "--port="):
 		case strings.HasPrefix(args[i], "-p="):
+		case (args[i] == "--host") && i+1 < len(args):
+			i++
+		case strings.HasPrefix(args[i], "--host="):
 		case args[i] == "--no-auto-upgrade":
 		default:
 			rest = append(rest, args[i])
@@ -81,6 +85,65 @@ func parseMode() string {
 		}
 	}
 	return "cloud"
+}
+
+func parseHost() (string, error) {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		var raw string
+		switch {
+		case (args[i] == "--host") && i+1 < len(args):
+			raw = args[i+1]
+		case strings.HasPrefix(args[i], "--host="):
+			raw = args[i][7:]
+		}
+		if raw == "" {
+			continue
+		}
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return "", fmt.Errorf("invalid host: empty value")
+		}
+		if _, _, err := net.SplitHostPort(raw); err == nil {
+			return "", fmt.Errorf("invalid host %q: should not contain a port, use --port separately", raw)
+		}
+		if net.ParseIP(raw) == nil && !isValidHostname(raw) {
+			return "", fmt.Errorf("invalid host %q: must be a valid IP address or hostname", raw)
+		}
+		return raw, nil
+	}
+	return "127.0.0.1", nil
+}
+
+// isValidHostname performs a basic check that the string looks like a
+// DNS hostname (RFC 952/1123). It is intentionally lenient and does not
+// enforce a strict length limit; the OS resolver has the final say.
+func isValidHostname(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	labels := strings.Split(s, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		for i, c := range label {
+			if c >= 'a' && c <= 'z' {
+				continue
+			}
+			if c >= 'A' && c <= 'Z' {
+				continue
+			}
+			if c >= '0' && c <= '9' {
+				continue
+			}
+			if c == '-' && i > 0 && i < len(label)-1 {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func parsePort() (int, error) {
@@ -164,6 +227,7 @@ func printUsage() {
 		{"--data-dir", "Base data directory (default: ~/.costrict)"},
 		{"--mode, -m", "Daemon mode: cloud (default) or local"},
 		{"--port, -p", "Local server port (default: random available port)"},
+		{"--host", "Bind address for the local server (default: 127.0.0.1, use 0.0.0.0 to accept all connections)"},
 		{"--no-auto-upgrade", "Disable auto-upgrade on cloud command"},
 	}))
 
