@@ -345,14 +345,28 @@ func (w *Watcher) updateRepoState(state *RepoState) error {
 	}
 	state.CurrentHead = strings.TrimSpace(head)
 
-	// Get remote HEAD (origin/<branch>) for push/fetch detection
+	// Get remote HEAD using @{u} (upstream tracking branch) for push/fetch detection
 	if state.CurrentBranch != "HEAD" && state.CurrentBranch != "" {
-		remoteRef := "origin/" + state.CurrentBranch
-		remoteHead, err := w.runGitCommand(state.Path, "rev-parse", "--verify", remoteRef, "2>/dev/null")
+		// Use @{u} to get the actual upstream branch (e.g., origin/main)
+		upstream, err := w.runGitCommand(state.Path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 		if err == nil {
-			state.RemoteHead = strings.TrimSpace(remoteHead)
+			upstream = strings.TrimSpace(upstream)
+			if upstream != "" && upstream != "@{u}" {
+				remoteHead, err := w.runGitCommand(state.Path, "rev-parse", "--verify", upstream)
+				if err == nil {
+					oldHead := state.RemoteHead
+					state.RemoteHead = strings.TrimSpace(remoteHead)
+					logger.Debug("Remote HEAD for %s (upstream: %s): %s (was: %s)", state.CurrentBranch, upstream, state.RemoteHead, oldHead)
+				} else {
+					logger.Debug("Failed to get remote HEAD for %s: %v", upstream, err)
+					state.RemoteHead = ""
+				}
+			} else {
+				logger.Debug("No upstream branch configured for %s", state.CurrentBranch)
+				state.RemoteHead = ""
+			}
 		} else {
-			// Remote branch doesn't exist yet
+			logger.Debug("No upstream configured for %s: %v", state.CurrentBranch, err)
 			state.RemoteHead = ""
 		}
 	}
