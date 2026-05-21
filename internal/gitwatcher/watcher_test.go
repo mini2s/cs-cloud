@@ -100,10 +100,6 @@ func TestNewGitWatcher(t *testing.T) {
 	if watcher == nil {
 		t.Fatal("New() returned nil watcher")
 	}
-
-	if watcher.pollInterval != 5*time.Second {
-		t.Errorf("Expected default poll interval of 5s, got %v", watcher.pollInterval)
-	}
 }
 
 func TestGitWatcher_StartStop(t *testing.T) {
@@ -278,8 +274,8 @@ func TestGitWatcher_BranchDetection(t *testing.T) {
 	newBranch := "test-branch"
 	runGitCommand(t, repoPath, "checkout", "-b", newBranch)
 
-	// Wait for poller to detect change (poll interval is 5s, but we'll wait a bit longer)
-	time.Sleep(6 * time.Second)
+	// Wait for fsnotify event + debounce (event-driven, fast)
+	time.Sleep(1 * time.Second)
 
 	// Check for branch changed event
 	events := mockBus.GetEventsByType(model.EventTypeHostGitBranchChanged)
@@ -344,8 +340,8 @@ func TestGitWatcher_CommitDetection(t *testing.T) {
 	runGitCommand(t, repoPath, "add", "test.txt")
 	runGitCommand(t, repoPath, "commit", "-m", "Test commit")
 
-	// Wait for poller to detect change
-	time.Sleep(6 * time.Second)
+	// Wait for fsnotify event + debounce (event-driven, fast)
+	time.Sleep(1 * time.Second)
 
 	// Check for commit event
 	events := mockBus.GetEventsByType(model.EventTypeHostGitCommit)
@@ -397,8 +393,8 @@ func TestGitWatcher_StatusDetection(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Wait for poller to detect change
-	time.Sleep(6 * time.Second)
+	// Wait for status poller fallback (10s interval)
+	time.Sleep(12 * time.Second)
 
 	// Check for status changed event
 	events := mockBus.GetEventsByType(model.EventTypeHostGitStatusChanged)

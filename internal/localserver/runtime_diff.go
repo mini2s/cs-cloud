@@ -67,7 +67,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer wg.Done()
-		b, err := exec.Command("git", "-C", absDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		b, err := exec.Command("git", "-c", "core.quotePath=false", "-C", absDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 		if err != nil {
 			mu.Lock()
 			notGit = true
@@ -130,7 +130,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseDiffStatErr(dir string, staged bool, filterPath string) ([]diffFileEntry, error) {
-	args := []string{"-C", dir, "diff", "--numstat"}
+	args := []string{"-c", "core.quotePath=false", "-C", dir, "diff", "--numstat"}
 	if staged {
 		args = append(args, "--cached")
 	}
@@ -177,7 +177,7 @@ func parseDiffStatErr(dir string, staged bool, filterPath string) ([]diffFileEnt
 }
 
 func parseUntrackedFiles(dir string, filterPath string) ([]diffFileEntry, error) {
-	args := []string{"-C", dir, "ls-files", "--others", "--exclude-standard"}
+	args := []string{"-c", "core.quotePath=false", "-C", dir, "ls-files", "--others", "--exclude-standard"}
 	if filterPath != "" {
 		args = append(args, "--", filterPath)
 	}
@@ -205,7 +205,7 @@ func parseUntrackedFiles(dir string, filterPath string) ([]diffFileEntry, error)
 }
 
 func runGitDiff(dir string, staged bool, filterPath string) string {
-	args := []string{"-C", dir, "diff"}
+	args := []string{"-c", "core.quotePath=false", "-C", dir, "diff"}
 	if staged {
 		args = append(args, "--cached")
 	}
@@ -270,9 +270,9 @@ func gitShowFile(dir string, source string, path string) string {
 	var args []string
 	switch source {
 	case "HEAD":
-		args = []string{"-C", dir, "show", "HEAD:" + path}
+		args = []string{"-c", "core.quotePath=false", "-C", dir, "show", "HEAD:" + path}
 	case "index":
-		args = []string{"-C", dir, "show", ":" + path}
+		args = []string{"-c", "core.quotePath=false", "-C", dir, "show", ":" + path}
 	default:
 		return ""
 	}
