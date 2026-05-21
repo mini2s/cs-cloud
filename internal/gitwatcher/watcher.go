@@ -35,6 +35,7 @@ type RepoState struct {
 	Path          string
 	CurrentBranch string
 	CurrentHead   string
+	RemoteHead    string
 	LastCommit    string
 	LastStatus    string
 	IsRepo        bool
@@ -272,6 +273,7 @@ func (w *Watcher) checkRepo(repoPath string) {
 
 	oldBranch := state.CurrentBranch
 	oldHead := state.CurrentHead
+	oldRemoteHead := state.RemoteHead
 
 	if err := w.updateRepoState(state); err != nil {
 		logger.Error("Failed to update repo state for %s: %v", repoPath, err)
@@ -286,6 +288,12 @@ func (w *Watcher) checkRepo(repoPath string) {
 	if state.CurrentHead != oldHead {
 		logger.Info("New commit in %s: %s", repoPath, state.CurrentHead)
 		w.emitCommitEvent(state, oldHead)
+	}
+
+	// Check remote HEAD changes (push, fetch, pull)
+	if state.RemoteHead != oldRemoteHead {
+		logger.Info("Remote HEAD changed in %s: %s -> %s", repoPath, oldRemoteHead, state.RemoteHead)
+		w.emitRemoteEvent(state, oldRemoteHead, repoPath)
 	}
 
 	// Check status changes
@@ -336,6 +344,18 @@ func (w *Watcher) updateRepoState(state *RepoState) error {
 		return fmt.Errorf("failed to get HEAD: %w", err)
 	}
 	state.CurrentHead = strings.TrimSpace(head)
+
+	// Get remote HEAD (origin/<branch>) for push/fetch detection
+	if state.CurrentBranch != "HEAD" && state.CurrentBranch != "" {
+		remoteRef := "origin/" + state.CurrentBranch
+		remoteHead, err := w.runGitCommand(state.Path, "rev-parse", "--verify", remoteRef, "2>/dev/null")
+		if err == nil {
+			state.RemoteHead = strings.TrimSpace(remoteHead)
+		} else {
+			// Remote branch doesn't exist yet
+			state.RemoteHead = ""
+		}
+	}
 
 	lastCommit, err := w.runGitCommand(state.Path, "log", "-1", "--format=%H %s")
 	if err != nil {
@@ -400,6 +420,20 @@ func (w *Watcher) emitStatusEvent(state *RepoState, status string) {
 		},
 	})
 	logger.Debug("Git status event emitted: %d changed files in %s", len(changedFiles), state.Path)
+}
+
+func (w *Watcher) emitRemoteEvent(state *RepoState, oldRemoteHead, repoPath string) {
+	w.eventBus.Emit(agent.Event{
+		Type: model.EventTypeHostGitRemoteChanged,
+		Data: map[string]any{
+			"branch":       state.CurrentBranch,
+			"old_head":     oldRemoteHead,
+			"new_head":     state.RemoteHead,
+			"repo_path":    repoPath,
+			"timestamp":    time.Now().Unix(),
+		},
+	})
+	logger.Debug("Git remote event emitted: %s -> %s in %s", oldRemoteHead, state.RemoteHead, repoPath)
 }
 
 func (w *Watcher) runGitCommand(dir string, args ...string) (string, error) {
