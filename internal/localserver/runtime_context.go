@@ -51,8 +51,8 @@ type vcsData struct {
 	StagedCount     int     `json:"stagedCount,omitempty" example:"2"`
 	UnstagedCount   int     `json:"unstagedCount,omitempty" example:"3"`
 	UntrackedCount  int     `json:"untrackedCount,omitempty" example:"1"`
-	AheadCount      int     `json:"aheadCount,omitempty" example:"5"`
-	BehindCount     int     `json:"behindCount,omitempty" example:"2"`
+	AheadCount      int     `json:"aheadCount" example:"5"`
+	BehindCount     int     `json:"behindCount" example:"2"`
 	LastCommitHash  string  `json:"lastCommitHash,omitempty" example:"a1b2c3d"`
 	LastCommitTime  int64   `json:"lastCommitTime,omitempty" example:"1699200000"`
 }
