@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -57,15 +56,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	if transformFunc != nil && r.Body != nil {
 		r.Body = transformFunc(r.Body)
-		buf, err := io.ReadAll(r.Body)
-		r.Body.Close()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "INTERNAL", "failed to read request body")
-			return
-		}
-		r.Body = io.NopCloser(bytes.NewReader(buf))
-		r.ContentLength = int64(len(buf))
-		r.Header.Set("Content-Length", strconv.Itoa(len(buf)))
+		// 设置为未知长度，让 ReverseProxy 流式处理
+		r.ContentLength = -1
+		r.Header.Set("Transfer-Encoding", "chunked")
 	}
 
 	targetAddr := targetURL.Scheme + "://" + targetURL.Host + target
