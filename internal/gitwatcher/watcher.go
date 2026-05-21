@@ -210,8 +210,29 @@ func (w *Watcher) watchGitInternals(repoPath string) {
 		_ = w.fw.Add(headsDir)
 	}
 
+	// .git/refs/remotes/ — push, fetch, remote branch updates
+	remotesDir := filepath.Join(gitDir, "refs", "remotes")
+	if _, err := os.Stat(remotesDir); err == nil {
+		_ = w.fw.Add(remotesDir)
+		filepath.Walk(remotesDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				_ = w.fw.Add(path)
+			}
+			return nil
+		})
+	}
+
 	// .git/index — staging area changes (git add, etc.)
 	_ = w.fw.Add(filepath.Join(gitDir, "index"))
+
+	// .git/packed-refs — packed remote refs (used by many git operations)
+	packedRefs := filepath.Join(gitDir, "packed-refs")
+	if _, err := os.Stat(packedRefs); err == nil {
+		_ = w.fw.Add(packedRefs)
+	}
 }
 
 // unwatchGitInternals removes fsnotify watches for a repo.
@@ -223,7 +244,20 @@ func (w *Watcher) unwatchGitInternals(repoPath string) {
 	_ = w.fw.Remove(filepath.Join(gitDir, "HEAD"))
 	_ = w.fw.Remove(filepath.Join(gitDir, "refs"))
 	_ = w.fw.Remove(filepath.Join(gitDir, "refs", "heads"))
+
+	remotesDir := filepath.Join(gitDir, "refs", "remotes")
+	filepath.Walk(remotesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			_ = w.fw.Remove(path)
+		}
+		return nil
+	})
+
 	_ = w.fw.Remove(filepath.Join(gitDir, "index"))
+	_ = w.fw.Remove(filepath.Join(gitDir, "packed-refs"))
 }
 
 // checkRepo checks a single repo for branch, commit, and status changes.
