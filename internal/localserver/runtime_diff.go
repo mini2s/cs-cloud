@@ -69,9 +69,12 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		b, err := exec.Command("git", "-c", "core.quotePath=false", "-C", absDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 		if err != nil {
-			mu.Lock()
-			notGit = true
-			mu.Unlock()
+			// Only mark as not a git repo if the basic rev-parse command fails
+			if isNotGitRepoError(absDir) {
+				mu.Lock()
+				notGit = true
+				mu.Unlock()
+			}
 			return
 		}
 		branch = strings.TrimSpace(string(b))
@@ -81,9 +84,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		entries, err := parseDiffStatErr(absDir, true, filterPath)
 		if err != nil {
-			mu.Lock()
-			notGit = true
-			mu.Unlock()
+			// Don't mark as notGit - diff commands can fail for other reasons
 			return
 		}
 		stagedFiles = entries
@@ -93,9 +94,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		entries, err := parseDiffStatErr(absDir, false, filterPath)
 		if err != nil {
-			mu.Lock()
-			notGit = true
-			mu.Unlock()
+			// Don't mark as notGit - diff commands can fail for other reasons
 			return
 		}
 		unstagedFiles = entries
@@ -105,9 +104,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		entries, err := parseUntrackedFiles(absDir, filterPath)
 		if err != nil {
-			mu.Lock()
-			notGit = true
-			mu.Unlock()
+			// Don't mark as notGit - ls-files can fail for other reasons
 			return
 		}
 		untrackedFiles = entries
@@ -303,4 +300,21 @@ func parseNumstat(s string) int {
 	var n int
 	fmt.Sscanf(s, "%d", &n)
 	return n
+}
+
+// isNotGitRepoError checks if the error is because the directory is not a git repository
+func isNotGitRepoError(dir string) bool {
+	// Run a simple git command to check if it's a git repo
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-dir")
+	err := cmd.Run()
+	if err != nil {
+		// Check if the error message indicates it's not a git repository
+		if ee, ok := err.(*exec.ExitError); ok {
+			errorMsg := string(ee.Stderr)
+			return strings.Contains(errorMsg, "not a git repository") ||
+				strings.Contains(errorMsg, "fatal: not a git repository")
+		}
+		return true
+	}
+	return false
 }
