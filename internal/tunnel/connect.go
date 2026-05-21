@@ -107,10 +107,31 @@ func runSession(ctx context.Context, gatewayURL, deviceID, deviceToken string, l
 		}
 	}()
 
+	// 客户端主动发送 WebSocket Ping，确保中间网络设备（WAF/CDN/Nginx）
+	// 将连接视为活跃。仅靠 yamux keepalive 的二进制数据帧不够——
+	// 某些中间设备只认 WebSocket Ping/Pong 控制帧。
+	pingCtx, pingCancel := context.WithCancel(ctx)
+	defer pingCancel()
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.Ping(pingCtx); err != nil {
+					logger.Warn("[tunnel] ws ping failed: %v", err)
+					return
+				}
+			}
+		}
+	}()
+
 	yamuxCfg := yamux.DefaultConfig()
 	yamuxCfg.EnableKeepAlive = true
 	yamuxCfg.KeepAliveInterval = 15 * time.Second
-	yamuxCfg.ConnectionWriteTimeout = 120 * time.Second
+	yamuxCfg.ConnectionWriteTimeout = 30 * time.Second
 	yamuxCfg.MaxStreamWindowSize = 4 * 1024 * 1024
 
 	session, err := yamux.Client(wsNetConn, yamuxCfg)
