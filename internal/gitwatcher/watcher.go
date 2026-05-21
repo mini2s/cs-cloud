@@ -171,7 +171,7 @@ func (w *Watcher) AddRepository(repoPath string) error {
 	logger.Info("Started watching git repository: %s (branch: %s)", repoPath, state.CurrentBranch)
 
 	// Emit initial branch event
-	w.emitBranchEvent(state.CurrentBranch, "", state.CurrentBranch)
+	w.emitBranchEvent(state.CurrentBranch, "", state.CurrentBranch, repoPath)
 
 	return nil
 }
@@ -246,7 +246,7 @@ func (w *Watcher) checkRepo(repoPath string) {
 
 	if state.CurrentBranch != oldBranch {
 		logger.Info("Branch changed in %s: %s -> %s", repoPath, oldBranch, state.CurrentBranch)
-		w.emitBranchEvent(state.CurrentBranch, oldBranch, state.CurrentHead)
+		w.emitBranchEvent(state.CurrentBranch, oldBranch, state.CurrentHead, repoPath)
 	}
 
 	if state.CurrentHead != oldHead {
@@ -312,17 +312,18 @@ func (w *Watcher) updateRepoState(state *RepoState) error {
 	return nil
 }
 
-func (w *Watcher) emitBranchEvent(newBranch, oldBranch, currentHead string) {
+func (w *Watcher) emitBranchEvent(newBranch, oldBranch, currentHead, repoPath string) {
 	w.eventBus.Emit(agent.Event{
 		Type: model.EventTypeHostGitBranchChanged,
 		Data: map[string]any{
 			"new_branch":   newBranch,
 			"old_branch":   oldBranch,
 			"current_head": currentHead,
+			"repo_path":    repoPath,
 			"timestamp":    time.Now().Unix(),
 		},
 	})
-	logger.Debug("Git branch event emitted: %s -> %s", oldBranch, newBranch)
+	logger.Debug("Git branch event emitted: %s -> %s in %s", oldBranch, newBranch, repoPath)
 }
 
 func (w *Watcher) emitCommitEvent(state *RepoState, oldHead string) {

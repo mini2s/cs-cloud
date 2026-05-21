@@ -86,6 +86,12 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 			if !isHostEvent(evt.Type) {
 				continue
 			}
+
+			// Filter events by workspace directory if specified
+			if workspace != "" && !shouldSendEventToWorkspace(evt, workspace) {
+				continue
+			}
+
 			data := serializeHostEvent(evt)
 			if data == "" {
 				continue
@@ -224,6 +230,46 @@ func (s *Server) proxyBackendSSE(ctx context.Context, origReq *http.Request, out
 // isHostEvent returns true if the event type is a host.xxx event.
 func isHostEvent(eventType string) bool {
 	return strings.HasPrefix(eventType, "host.")
+}
+
+// shouldSendEventToWorkspace checks if a host event should be sent to the given workspace.
+// Only events that belong to the workspace (git events with matching repo_path,
+// file events within the workspace directory) are allowed.
+func shouldSendEventToWorkspace(evt agent.Event, workspace string) bool {
+	if evt.Data == nil {
+		return true // Allow events without data
+	}
+
+	data, ok := evt.Data.(map[string]any)
+	if !ok {
+		return true
+	}
+
+	// For git events, check repo_path
+	repoPath, hasRepoPath := data["repo_path"].(string)
+	if hasRepoPath && repoPath != "" {
+		// Normalize paths for comparison
+		normalizedRepo := filepath.Clean(repoPath)
+		normalizedWorkspace := filepath.Clean(workspace)
+		return normalizedRepo == normalizedWorkspace
+	}
+
+	// For file events, check if the file path is within workspace
+	filePath, hasFilePath := data["path"].(string)
+	if hasFilePath && filePath != "" {
+		normalizedFile := filepath.Clean(filePath)
+		normalizedWorkspace := filepath.Clean(workspace)
+		// Check if the file is within the workspace directory
+		relPath, err := filepath.Rel(normalizedWorkspace, normalizedFile)
+		if err != nil {
+			return false
+		}
+		// Check if the relative path doesn't start with ".." (meaning it's within workspace)
+		return !strings.HasPrefix(relPath, "..")
+	}
+
+	// Allow other host events without specific path data
+	return true
 }
 
 // serializeHostEvent converts an agent.Event into the SSE envelope format
