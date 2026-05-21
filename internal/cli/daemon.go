@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -76,6 +77,11 @@ func runDaemon(a *app.App) error {
 		logger.Error("invalid port: %v", err)
 		return err
 	}
+	host, err := parseHost()
+	if err != nil {
+		logger.Error("invalid host: %v", err)
+		return err
+	}
 
 	if err := a.WritePID(os.Getpid()); err != nil {
 		logger.Warn("failed to write pid: %v", err)
@@ -103,7 +109,7 @@ func runDaemon(a *app.App) error {
 		}
 	}
 
-	if err := srv.Start(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+	if err := srv.Start(net.JoinHostPort(host, fmt.Sprintf("%d", port))); err != nil {
 		logger.Error("failed to start server: %v", err)
 		return err
 	}
@@ -117,7 +123,7 @@ func runDaemon(a *app.App) error {
 		return err
 	}
 
-	logger.Info("daemon started (version: %s, mode: %s, port: %d, auto_upgrade: %v)", version.FullString(), mode, srv.Port(), a.Config().AutoUpgrade)
+	logger.Info("daemon started (version: %s, mode: %s, host: %s, port: %d, auto_upgrade: %v)", version.FullString(), mode, host, srv.Port(), a.Config().AutoUpgrade)
 	logger.Info("swagger docs: %s/api/v1/docs", srv.URL())
 	recent, err := a.LoadRecentWorkspaces()
 	if err != nil {

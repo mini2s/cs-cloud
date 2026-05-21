@@ -212,7 +212,18 @@ func (s *Server) Start(addr string) error {
 		return err
 	}
 	s.ln = ln
-	s.url = "http://" + ln.Addr().String()
+
+	// Normalize the URL: wildcard addresses like 0.0.0.0 or :: are not
+	// directly usable in a browser or API client. Replace them with
+	// 127.0.0.1 so the reported URL is always accessible locally.
+	host, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		s.url = "http://" + ln.Addr().String()
+	} else if host == "0.0.0.0" || host == "::" {
+		s.url = "http://127.0.0.1:" + port
+	} else {
+		s.url = "http://" + ln.Addr().String()
+	}
 
 	// Start host event watchers
 	ctx := context.Background()
