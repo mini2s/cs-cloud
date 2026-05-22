@@ -55,9 +55,9 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		branch         string
-		stagedFiles    []diffFileEntry
-		unstagedFiles  []diffFileEntry
-		untrackedFiles []diffFileEntry
+		stagedFiles    []diffFileEntry = []diffFileEntry{}
+		unstagedFiles  []diffFileEntry = []diffFileEntry{}
+		untrackedFiles []diffFileEntry = []diffFileEntry{}
 		mu             sync.Mutex
 		wg             sync.WaitGroup
 		notGit         bool
@@ -135,9 +135,11 @@ func parseDiffStatErr(dir string, staged bool, filterPath string) ([]diffFileEnt
 		args = append(args, "--", filterPath)
 	}
 
+	// Try numstat first for detailed stats
 	out, err := exec.Command("git", args...).Output()
 	if err != nil {
-		return nil, err
+		// Fallback to name-status if numstat fails
+		return parseDiffByNameStatus(dir, staged, filterPath)
 	}
 
 	var entries []diffFileEntry
@@ -164,6 +166,63 @@ func parseDiffStatErr(dir string, staged bool, filterPath string) ([]diffFileEnt
 			Status:    status,
 			Additions: additions,
 			Deletions: deletions,
+		})
+	}
+
+	if len(entries) == 0 && filterPath == "" {
+		entries = []diffFileEntry{}
+	}
+	return entries, nil
+}
+
+// parseDiffByNameStatus falls back to getting file names without detailed stats
+func parseDiffByNameStatus(dir string, staged bool, filterPath string) ([]diffFileEntry, error) {
+	args := []string{"-c", "core.quotePath=false", "-C", dir, "diff", "--name-status"}
+	if staged {
+		args = append(args, "--cached")
+	}
+	if filterPath != "" {
+		args = append(args, "--", filterPath)
+	}
+
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []diffFileEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		status := parts[0]
+		path := strings.Join(parts[1:], " ") // Handle paths with spaces
+
+		// Map git status codes to our status strings
+		switch status {
+		case "M":
+			status = "modified"
+		case "D":
+			status = "deleted"
+		case "A":
+			status = "added"
+		case "R":
+			status = "renamed"
+		case "C":
+			status = "copied"
+		default:
+			status = "modified"
+		}
+
+		entries = append(entries, diffFileEntry{
+			Path:      path,
+			Status:    status,
+			Additions: 0,
+			Deletions: 0,
 		})
 	}
 
