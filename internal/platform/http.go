@@ -27,6 +27,10 @@ func HTTPClient() *http.Client {
 				TLSClientConfig: &tls.Config{
 					InsecureSkipVerify: true,
 				},
+				// 限制连接池大小，防止并发请求风暴
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 2,
+				MaxConnsPerHost:     5,
 			},
 		}
 	})

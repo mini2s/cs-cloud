@@ -51,6 +51,18 @@ func Connect(ctx context.Context, localPort int, cfg *config.Config, onSessionCh
 
 		gatewayURL, err := device.AssignGateway(ctx, dev)
 		if err != nil {
+			// 检测是否是认证错误（401/403），需要重新注册
+			if device.IsGatewayAssignAuthError(err) {
+				logger.Warn("[tunnel] device token invalid (%v), attempting re-registration...", err)
+				dev, err = device.ReRegister(ctx, cfg)
+				if err != nil {
+					return fmt.Errorf("re-register failed: %w", err)
+				}
+				logger.Info("[tunnel] device re-registered successfully (device_id=%s)", dev.DeviceID)
+				attempt = 0 // 重置重试计数
+				continue
+			}
+
 			logger.Warn("[tunnel] gateway-assign failed: %v, retrying...", err)
 			delay := backoff(attempt)
 			attempt++
