@@ -107,6 +107,7 @@ func (a *AdapterServer) adaptEventMap(eventName string, payload map[string]any, 
 		for k, v := range payload {
 			props[k] = v
 		}
+		enrichNativeToolPart(eventName, props)
 		return []sseFrame{frame(eventName, props)}
 	}
 
@@ -289,6 +290,70 @@ func adaptResultEvent(sessionID string, payload map[string]any, ss *streamingSta
 		}),
 	)
 	return frames
+}
+
+// enrichNativeToolPart supplements tool parts emitted by csc's _native_opencode
+// path.  It normalizes snake_case input keys for all tools and adds filediff
+// metadata for edit/write tools before forwarding to the UI.
+func enrichNativeToolPart(eventName string, props map[string]any) {
+	if eventName != "message.part.updated" {
+		return
+	}
+	part, _ := props["part"].(map[string]any)
+	if part == nil || part["type"] != "tool" {
+		return
+	}
+	state, _ := part["state"].(map[string]any)
+	if state == nil {
+		return
+	}
+
+	input, _ := state["input"].(map[string]any)
+	if input == nil {
+		return
+	}
+	// Normalize snake_case keys that csc may not have renamed yet.
+	if v, ok := input["file_path"]; ok {
+		delete(input, "file_path")
+		input["filePath"] = v
+	}
+	if v, ok := input["old_string"]; ok {
+		delete(input, "old_string")
+		input["oldString"] = v
+	}
+	if v, ok := input["new_string"]; ok {
+		delete(input, "new_string")
+		input["newString"] = v
+	}
+	if v, ok := input["replace_all"]; ok {
+		delete(input, "replace_all")
+		input["replaceAll"] = v
+	}
+
+	tool, _ := part["tool"].(string)
+	toolLower := strings.ToLower(tool)
+	if toolLower != "edit" && toolLower != "write" {
+		return
+	}
+
+	metadata, _ := state["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if _, exists := metadata["filediff"]; exists {
+		return
+	}
+
+	status, _ := state["status"].(string)
+	if filediff := buildFileDiff(input); filediff != nil {
+		metadata["filediff"] = filediff
+		if status == "completed" || status == "error" {
+			if output, _ := state["output"].(string); output != "" {
+				metadata["output"] = output
+			}
+		}
+		state["metadata"] = metadata
+	}
 }
 
 func adaptControlRequestEvent(sessionID string, payload map[string]any) []sseFrame {
