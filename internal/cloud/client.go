@@ -6,6 +6,7 @@ import (
 
 	"cs-cloud/internal/config"
 	"cs-cloud/internal/platform"
+	"cs-cloud/internal/version"
 )
 
 const cloudAPIPrefix = "cloud-api"
@@ -71,6 +72,7 @@ func (c *Client) URL(path, credBaseURL string) string {
 func (c *Client) SetDeviceAuthHeaders(req *http.Request, deviceToken string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
+	req.Header.Set("User-Agent", version.UserAgent())
 }
 
 func (c *Client) SetDeviceAuthHeadersWithUser(req *http.Request, deviceToken, userAccessToken string) {
@@ -83,6 +85,7 @@ func (c *Client) SetDeviceAuthHeadersWithUser(req *http.Request, deviceToken, us
 func (c *Client) SetUserAuthHeaders(req *http.Request, accessToken string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", version.UserAgent())
 }
 
 func trimRight(s, suffix string) string {
