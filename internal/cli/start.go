@@ -14,11 +14,25 @@ import (
 	"cs-cloud/internal/device"
 	"cs-cloud/internal/platform"
 	"cs-cloud/internal/provider"
+	"cs-cloud/internal/updater"
+	"cs-cloud/internal/version"
 )
 
 const readyTimeout = 30 * time.Second
 
 func start(a *app.App) error {
+	// 如果是更新后的重启，跳过更新检查
+	if os.Getenv("CS_CLOUD_SKIP_UPDATE_CHECK") == "true" {
+		os.Unsetenv("CS_CLOUD_SKIP_UPDATE_CHECK") // 清除标记
+	} else if !platform.NoAutoUpgrade() {
+		// 检查并应用更新（如果有），除非用户指定了 --no-auto-upgrade
+		if err := checkAndApplyUpdates(a); err != nil {
+			printWarn("Update check failed: %v (continuing with current version)", err)
+		}
+	} else {
+		printInfo("Auto-update disabled by --no-auto-upgrade flag")
+	}
+
 	running, pid, _ := a.DaemonStatus()
 	if running {
 		url, _ := a.ServerURL()
@@ -231,4 +245,76 @@ func printRegDebugInfo(a *app.App) {
 	} else {
 		printKV("device_id", provider.GenerateMachineID())
 	}
+}
+
+func checkAndApplyUpdates(a *app.App) error {
+	printInfo("Checking for updates...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	updaterMgr := updater.NewManager(
+		a.CloudBaseURL(), a.RootDir(),
+		updater.WithPolicy(updater.PolicyAuto), // 自动检查、下载并应用更新
+		updater.WithAutoCheck(false),           // 手动触发，不需要后台自动检查
+	)
+
+	result, err := updaterMgr.CheckNow(ctx)
+	if err != nil {
+		return fmt.Errorf("check updates: %w", err)
+	}
+
+	if !result.CanUpdate {
+		printInfo("Already on the latest version: %s", version.Get())
+		return nil
+	}
+
+	printInfo("Update available: %s → %s", version.Get(), result.Version)
+	if result.Changelog != "" {
+		printInfo("Changelog: %s", result.Changelog)
+	}
+	printInfo("Automatically applying update...")
+
+	printInfo("Applying update...")
+	onProgress := func(phase string, progress float64, message string) {
+		if progress > 0 && int(progress)%20 == 0 {
+			fmt.Printf("[%s] %.0f%%: %s\n", phase, progress, message)
+		}
+	}
+
+	if err := updaterMgr.ApplyWithProgress(ctx, result.Version, onProgress); err != nil {
+		return fmt.Errorf("apply update: %w", err)
+	}
+
+	printSuccess("Update applied successfully. Restarting to use new version...")
+
+	// 更新完成后，执行自重启
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable: %w", err)
+	}
+
+	// 保存当前状态，避免重启后重复更新检查
+	os.Setenv("CS_CLOUD_SKIP_UPDATE_CHECK", "true")
+
+	// 执行自重启，替换当前进程
+	args := os.Args
+	if len(args) > 1 && args[1] == "_daemon" {
+		// 如果是 daemon 进程，需要重新启动整个服务
+		args = []string{"start"}
+	}
+
+	// 启动新进程
+	cmd := newDaemonCmd(exe, args)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start updated process: %w", err)
+	}
+
+	// 退出当前进程
+	os.Exit(0)
+	return nil
 }
