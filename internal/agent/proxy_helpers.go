@@ -109,7 +109,11 @@ func RenameJSONFieldAny(from []string, to string) func(io.ReadCloser) io.ReadClo
 			}
 			replaced := buf
 			for _, key := range from {
-				replaced = BytesReplaceKey(replaced, key, to)
+				next := BytesReplaceKey(buf, key, to)
+				if !bytes.Equal(next, buf) {
+					replaced = next
+					break
+				}
 			}
 			pw.Write(replaced)
 		}()
