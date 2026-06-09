@@ -12,10 +12,13 @@ type initStatusAgent struct {
 }
 
 type initStatusPrewarm struct {
-	Status     string `json:"status"`
-	StartedAt  string `json:"started_at,omitempty"`
-	FinishedAt string `json:"finished_at,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Status        string `json:"status"`
+	StartedAt     string `json:"started_at,omitempty"`
+	FinishedAt    string `json:"finished_at,omitempty"`
+	Error         string `json:"error,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	SessionStatus string `json:"session_status,omitempty"`
+	Consumed      bool   `json:"consumed,omitempty"`
 }
 
 type initStatusData struct {
@@ -75,7 +78,7 @@ func (s *Server) buildInitStatus(dir string) initStatusData {
 	}
 
 	ready := agentInfo.Healthy &&
-		(prewarmInfo.Status == "completed" || prewarmInfo.Status == "")
+		(prewarmInfo.Status == "completed" || prewarmInfo.Status == "consumed" || prewarmInfo.Status == "")
 
 	return initStatusData{
 		Directory: dir,
@@ -102,8 +105,11 @@ func (s *Server) buildPrewarmInfo(dir string) initStatusPrewarm {
 		return initStatusPrewarm{Status: ""}
 	}
 	info := initStatusPrewarm{
-		Status: st.Status,
-		Error:  st.Error,
+		Status:        st.Status,
+		Error:         st.Error,
+		SessionID:     st.SessionID,
+		SessionStatus: st.SessionStatus,
+		Consumed:      st.Consumed,
 	}
 	if st.StartedAt != nil {
 		info.StartedAt = st.StartedAt.Format(time.RFC3339)

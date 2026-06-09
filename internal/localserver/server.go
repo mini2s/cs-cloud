@@ -1,8 +1,11 @@
 package localserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -32,10 +35,13 @@ type PrewarmTracker interface {
 }
 
 type prewarmState struct {
-	Status     string     `json:"status"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	Status        string     `json:"status"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	SessionID     string     `json:"session_id,omitempty"`
+	SessionStatus string     `json:"session_status,omitempty"`
+	Consumed      bool       `json:"consumed,omitempty"`
 }
 
 type Server struct {
@@ -62,8 +68,8 @@ type Server struct {
 
 	tunnelStatus TunnelStatusProvider
 
-	prewarmMu   sync.Mutex
-	prewarmMap  map[string]*prewarmState
+	prewarmMu  sync.Mutex
+	prewarmMap map[string]*prewarmState
 
 	// Host event watchers
 	fileWatcher *filewatcher.Watcher
@@ -316,10 +322,52 @@ func (s *Server) MarkCompleted(dir string, err error) {
 	if err != nil {
 		st.Status = "failed"
 		st.Error = err.Error()
+	} else if st.Consumed {
+		st.Status = "consumed"
 	} else {
 		st.Status = "completed"
 	}
 	st.FinishedAt = &now
+}
+
+func (s *Server) MarkPrewarmSession(dir, sessionID, sessionStatus string) {
+	s.prewarmMu.Lock()
+	defer s.prewarmMu.Unlock()
+	st := s.prewarmMap[dir]
+	if st == nil {
+		st = &prewarmState{}
+		s.prewarmMap[dir] = st
+	}
+	st.SessionID = sessionID
+	st.SessionStatus = sessionStatus
+}
+
+func (s *Server) ConsumePrewarmedSession(dir string, wait time.Duration) *prewarmState {
+	deadline := time.Now().Add(wait)
+	for {
+		s.prewarmMu.Lock()
+		st := s.prewarmMap[dir]
+		if st != nil && !st.Consumed && st.SessionID != "" && (st.Status == "in_progress" || st.Status == "completed") {
+			st.Consumed = true
+			st.Status = "consumed"
+			cp := *st
+			if st.StartedAt != nil {
+				t := *st.StartedAt
+				cp.StartedAt = &t
+			}
+			if st.FinishedAt != nil {
+				t := *st.FinishedAt
+				cp.FinishedAt = &t
+			}
+			s.prewarmMu.Unlock()
+			return &cp
+		}
+		s.prewarmMu.Unlock()
+		if wait <= 0 || time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func (s *Server) GetPrewarmState(dir string) *prewarmState {
@@ -357,6 +405,34 @@ func (s *Server) TriggerPrewarmIfNeeded(dir string) {
 	go s.prewarmDir(context.Background(), dir)
 }
 
+func (s *Server) RefillPrewarm(dir string) {
+	s.prewarmMu.Lock()
+	st := s.prewarmMap[dir]
+	if st != nil && st.Status == "in_progress" && !st.Consumed {
+		s.prewarmMu.Unlock()
+		return
+	}
+	now := time.Now()
+	s.prewarmMap[dir] = &prewarmState{
+		Status:    "in_progress",
+		StartedAt: &now,
+	}
+	s.prewarmMu.Unlock()
+
+	go s.prewarmDir(context.Background(), dir)
+}
+
+func (s *Server) IsUnconsumedPrewarmSession(sessionID string) bool {
+	s.prewarmMu.Lock()
+	defer s.prewarmMu.Unlock()
+	for _, st := range s.prewarmMap {
+		if st.SessionID == sessionID && !st.Consumed {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) prewarmDir(ctx context.Context, dir string) {
 	base := s.manager.Endpoint()
 	if base == "" {
@@ -364,7 +440,21 @@ func (s *Server) prewarmDir(ctx context.Context, dir string) {
 		return
 	}
 
-	s.prewarmRequest(ctx, &http.Client{Timeout: 30 * time.Second}, base, "/session", dir)
+	cli := &http.Client{Timeout: 30 * time.Second}
+	sessionID, err := s.prewarmCreateSession(ctx, cli, base, dir)
+	if err != nil {
+		s.MarkCompleted(dir, err)
+		return
+	}
+	if sessionID != "" {
+		s.MarkPrewarmSession(dir, sessionID, "starting")
+		if status, err := s.prewarmWaitSessionReady(ctx, cli, base, dir, sessionID, 30*time.Second); err == nil {
+			s.MarkPrewarmSession(dir, sessionID, status)
+		} else {
+			logger.Warn("prewarm session %s not ready after wait: %v", sessionID, err)
+			s.MarkPrewarmSession(dir, sessionID, "starting")
+		}
+	}
 
 	paths := s.manager.PrewarmPaths()
 	if len(paths) == 0 {
@@ -383,6 +473,89 @@ func (s *Server) prewarmDir(ctx context.Context, dir string) {
 	}
 	wg.Wait()
 	s.MarkCompleted(dir, nil)
+}
+
+func (s *Server) prewarmCreateSession(ctx context.Context, cli *http.Client, base string, dir string) (string, error) {
+	begin := time.Now()
+	body, err := json.Marshal(map[string]string{"cwd": dir})
+	if err != nil {
+		return "", fmt.Errorf("prewarm create session body encode failed: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/session", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("prewarm create session request build failed: %w", err)
+	}
+	if hdr := s.manager.WorkspaceHeaderName(); hdr != "" {
+		req.Header.Set(hdr, dir)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := cli.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("prewarm create session failed after %s: %w", time.Since(begin), err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return "", fmt.Errorf("prewarm create session returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(respBody, &payload); err != nil {
+		return "", fmt.Errorf("prewarm create session decode failed: %w", err)
+	}
+	sessionID, _ := payload["session_id"].(string)
+	if sessionID == "" {
+		sessionID, _ = payload["id"].(string)
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("prewarm create session response missing session_id")
+	}
+	logger.Info("prewarm session created %s in %s", sessionID, time.Since(begin))
+	return sessionID, nil
+}
+
+func (s *Server) prewarmWaitSessionReady(ctx context.Context, cli *http.Client, base, dir, sessionID string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := s.prewarmGetSessionStatus(ctx, cli, base, dir, sessionID)
+		if err == nil && status == "running" {
+			return status, nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return status, err
+			}
+			return status, fmt.Errorf("session status is %q", status)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func (s *Server) prewarmGetSessionStatus(ctx context.Context, cli *http.Client, base, dir, sessionID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/session/"+sessionID, nil)
+	if err != nil {
+		return "", err
+	}
+	if hdr := s.manager.WorkspaceHeaderName(); hdr != "" {
+		req.Header.Set(hdr, dir)
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return "", fmt.Errorf("status returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(respBody, &payload); err != nil {
+		return "", err
+	}
+	status, _ := payload["status"].(string)
+	if status == "" {
+		status, _ = payload["state"].(string)
+	}
+	return status, nil
 }
 
 func (s *Server) prewarmRequest(ctx context.Context, cli *http.Client, base string, path string, dir string) {

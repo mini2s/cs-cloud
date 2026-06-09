@@ -1,6 +1,14 @@
 package localserver
 
-import "net/http"
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"time"
+)
 
 // --- Conversations ---
 
@@ -13,6 +21,45 @@ import "net/http"
 // @Failure      503  {object}  envelope
 // @Router       /conversations [post]
 func (s *Server) handleConversationCreate(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	trimmed := bytes.TrimSpace(body)
+	canUsePrewarm := len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}"))
+
+	dir := getWorkspaceDir(r)
+	if canUsePrewarm && dir != "" {
+		if abs, err := filepath.Abs(filepath.Clean(dir)); err == nil {
+			dir = abs
+		}
+		if st := s.ConsumePrewarmedSession(dir, 500*time.Millisecond); st != nil {
+			payload := map[string]any{
+				"id":             st.SessionID,
+				"session_id":     st.SessionID,
+				"sessionID":      st.SessionID,
+				"status":         st.SessionStatus,
+				"state":          st.SessionStatus,
+				"directory":      dir,
+				"cwd":            dir,
+				"backend":        "csc",
+				"driver":         "http",
+				"prewarmed":      true,
+				"prewarm_status": st.Status,
+			}
+			if payload["status"] == "" {
+				payload["status"] = "starting"
+				payload["state"] = "starting"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(payload)
+			go s.RefillPrewarm(dir)
+			return
+		}
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	s.handleProxy(w, r)
 }
 
@@ -24,7 +71,64 @@ func (s *Server) handleConversationCreate(w http.ResponseWriter, r *http.Request
 // @Failure      503  {object}  envelope
 // @Router       /conversations [get]
 func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) {
-	s.handleProxy(w, r)
+	endpoint := s.manager.Endpoint()
+	if endpoint == "" {
+		writeErr(w, http.StatusServiceUnavailable, "UNAVAILABLE", "no agent backend available")
+		return
+	}
+	target, err := url.Parse(endpoint + "/session")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", "invalid backend endpoint")
+		return
+	}
+	target.RawQuery = r.URL.RawQuery
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", "failed to build backend request")
+		return
+	}
+	backend := s.manager.DefaultBackend()
+	if d, ok := s.manager.GetDriver(backend); ok {
+		for from, to := range d.HeaderMap() {
+			if v := r.Header.Get(from); v != "" {
+				req.Header.Set(to, v)
+			}
+		}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "BAD_GATEWAY", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+		return
+	}
+	var sessions []map[string]any
+	if err := json.Unmarshal(body, &sessions); err != nil {
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+		return
+	}
+	filtered := sessions[:0]
+	for _, session := range sessions {
+		id, _ := session["session_id"].(string)
+		if id == "" {
+			id, _ = session["id"].(string)
+		}
+		if id != "" && s.IsUnconsumedPrewarmSession(id) {
+			continue
+		}
+		filtered = append(filtered, session)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_ = json.NewEncoder(w).Encode(filtered)
 }
 
 // @Summary      Get conversation status
